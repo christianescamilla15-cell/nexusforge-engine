@@ -1,0 +1,48 @@
+id: analytics
+name: "Analytics & Metrics Dashboard"
+description: >
+  Usage tracking, event analytics, and metrics dashboards.
+  Records user actions, API call volumes, agent performance,
+  and generates reports. Includes a frontend dashboard component.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires:
+  - auth
+
+optional_dependencies:
+  - observability
+
+env_contract:
+  - name: ANALYTICS_RETENTION_DAYS
+    description: "Number of days to retain raw analytics events"
+    required: false
+    default: "90"
+
+injects:
+  folders:
+    - src/analytics/
+  files:
+    - path: src/analytics/__init__.py
+      content: "# Analytics module"
+    - path: src/analytics/router.py
+      description: "FastAPI router for analytics queries and dashboards"
+    - path: src/analytics/models.py
+      description: "Event and Metric SQLAlchemy models"
+    - path: src/analytics/schemas.py
+      description: "Pydantic schemas for analytics events and queries"
+    - path: src/analytics/service.py
+      description: "Event recording, aggregation, and reporting logic"
+    - path: src/analytics/tracker.py
+      description: "Lightweight event tracker middleware"
+    - path: src/db/migrations/003_analytics.sql
+      description: "SQL migration for analytics events table"
+
+post_install_hooks: []

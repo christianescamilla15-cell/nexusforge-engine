@@ -1,0 +1,64 @@
+id: connectors
+name: "External Connectors & Integrations"
+description: >
+  Pre-built connectors for external services: Slack, Google Drive,
+  Notion, Jira, and webhooks. Each connector follows a standard
+  interface for authentication, data sync, and event handling.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires:
+  - auth
+
+optional_dependencies:
+  - notifications
+
+env_contract:
+  - name: SLACK_BOT_TOKEN
+    description: "Slack bot OAuth token"
+    required: false
+  - name: SLACK_SIGNING_SECRET
+    description: "Slack request signing secret"
+    required: false
+  - name: GOOGLE_SERVICE_ACCOUNT_JSON
+    description: "Path to Google service account credentials"
+    required: false
+  - name: NOTION_API_KEY
+    description: "Notion integration API key"
+    required: false
+  - name: JIRA_URL
+    description: "Jira instance base URL"
+    required: false
+  - name: JIRA_API_TOKEN
+    description: "Jira API token"
+    required: false
+
+injects:
+  folders:
+    - src/connectors/
+  files:
+    - path: src/connectors/__init__.py
+      content: "# Connectors module"
+    - path: src/connectors/router.py
+      description: "FastAPI router for connector management"
+    - path: src/connectors/base.py
+      description: "Base connector interface"
+    - path: src/connectors/slack.py
+      description: "Slack connector implementation"
+    - path: src/connectors/google_drive.py
+      description: "Google Drive connector implementation"
+    - path: src/connectors/notion.py
+      description: "Notion connector implementation"
+    - path: src/connectors/webhook.py
+      description: "Generic webhook connector"
+
+post_install_hooks:
+  - command: "pip install slack-sdk google-api-python-client notion-client"
+    description: "Install connector SDK dependencies"

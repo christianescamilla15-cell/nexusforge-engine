@@ -1,0 +1,94 @@
+id: agentic_saas
+name: "Agentic SaaS Platform"
+description: >
+  Full-stack AI SaaS platform with multi-agent orchestration,
+  user management, billing, and analytics. Suitable for building
+  products like NexusForge 1.0 — autonomous systems that coordinate
+  multiple AI agents to accomplish complex workflows.
+
+stack:
+  framework: fastapi
+  language: python
+  state_management: redis
+  database: postgresql
+  queue: celery
+  frontend: react
+
+base_structure:
+  - src/
+  - src/agents/
+  - src/api/
+  - src/api/routes/
+  - src/api/middleware/
+  - src/core/
+  - src/db/
+  - src/db/models/
+  - src/db/migrations/
+  - src/services/
+  - src/schemas/
+  - src/tasks/
+  - src/utils/
+  - frontend/
+  - frontend/src/
+  - frontend/src/components/
+  - frontend/src/pages/
+  - frontend/src/hooks/
+  - frontend/src/services/
+  - frontend/public/
+  - tests/
+  - tests/unit/
+  - tests/integration/
+  - tests/e2e/
+  - docs/
+  - scripts/
+  - infra/
+
+required_modules:
+  - auth
+  - ai_chat
+  - observability
+
+optional_modules:
+  - billing
+  - analytics
+  - notifications
+  - connectors
+  - admin_panel
+
+env_contract:
+  - name: DATABASE_URL
+    description: "PostgreSQL connection string"
+    example: "postgresql://user:pass@localhost:5432/nexusforge"
+    required: true
+  - name: REDIS_URL
+    description: "Redis connection string for state and caching"
+    example: "redis://localhost:6379/0"
+    required: true
+  - name: ANTHROPIC_API_KEY
+    description: "Claude API key for AI agent orchestration"
+    example: "sk-ant-..."
+    required: true
+  - name: SECRET_KEY
+    description: "Application secret for JWT signing"
+    example: "change-me-in-production"
+    required: true
+  - name: CELERY_BROKER_URL
+    description: "Celery broker URL (typically Redis)"
+    example: "redis://localhost:6379/1"
+    required: false
+  - name: CORS_ORIGINS
+    description: "Allowed CORS origins, comma-separated"
+    example: "http://localhost:3000,http://localhost:5173"
+    required: false
+  - name: LOG_LEVEL
+    description: "Logging level"
+    example: "INFO"
+    required: false
+
+post_generation_hooks:
+  - command: "pip install -r requirements.txt"
+    description: "Install Python dependencies"
+  - command: "cd frontend && npm install"
+    description: "Install frontend dependencies"
+  - command: "alembic upgrade head"
+    description: "Run database migrations"

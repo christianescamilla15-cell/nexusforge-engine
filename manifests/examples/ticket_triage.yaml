@@ -1,0 +1,118 @@
+version: "1.0"
+generated_at: "2026-04-03T00:00:00Z"
+
+project:
+  name: "SmartTicket AI"
+  description: >
+    AI-powered ticket triage system for customer support teams.
+    Automatically classifies incoming tickets by urgency (critical,
+    high, medium, low) and topic (billing, technical, account, general).
+    Routes tickets to the appropriate team and suggests draft responses
+    based on historical resolutions. Includes a manager dashboard for
+    queue health monitoring and SLA tracking.
+  type: ticket_system
+
+blueprint:
+  id: ticket_system
+  name: "Ticket Triage System"
+
+stack:
+  framework: fastapi
+  language: python
+  state_management: redis
+  database: postgresql
+  queue: celery
+  frontend: react
+
+modules:
+  - id: auth
+    name: "Authentication & Authorization"
+    requires: []
+  - id: observability
+    name: "Observability & Logging"
+    requires: []
+  - id: notifications
+    name: "Notifications System"
+    requires:
+      - auth
+  - id: analytics
+    name: "Analytics & Metrics Dashboard"
+    requires:
+      - auth
+  - id: connectors
+    name: "External Connectors & Integrations"
+    requires:
+      - auth
+  - id: admin_panel
+    name: "Admin Panel"
+    requires:
+      - auth
+      - observability
+
+env_contract:
+  - name: DATABASE_URL
+    description: "PostgreSQL connection string"
+    example: "postgresql://user:pass@localhost:5432/smartticket"
+    required: true
+  - name: REDIS_URL
+    description: "Redis connection string"
+    example: "redis://localhost:6379/0"
+    required: true
+  - name: ANTHROPIC_API_KEY
+    description: "Claude API key for ticket classification"
+    example: "sk-ant-..."
+    required: true
+  - name: SECRET_KEY
+    description: "JWT signing secret"
+    example: "change-me-in-production"
+    required: true
+  - name: SMTP_HOST
+    description: "SMTP server for notifications"
+    example: "smtp.gmail.com"
+    required: false
+  - name: SMTP_PORT
+    description: "SMTP port"
+    example: "587"
+    required: false
+  - name: SLACK_BOT_TOKEN
+    description: "Slack bot token for ticket alerts"
+    required: false
+  - name: LOG_LEVEL
+    description: "Logging level"
+    example: "INFO"
+    required: false
+
+base_structure:
+  - src/
+  - src/api/
+  - src/api/routes/
+  - src/api/middleware/
+  - src/core/
+  - src/classifiers/
+  - src/db/
+  - src/db/models/
+  - src/db/migrations/
+  - src/services/
+  - src/schemas/
+  - src/tasks/
+  - src/utils/
+  - frontend/
+  - frontend/src/
+  - frontend/src/components/
+  - frontend/src/pages/
+  - frontend/src/hooks/
+  - frontend/src/services/
+  - frontend/public/
+  - tests/
+  - tests/unit/
+  - tests/integration/
+  - docs/
+  - scripts/
+
+post_generation_hooks:
+  - command: "pip install -r requirements.txt"
+    description: "Install Python dependencies"
+  - command: "cd frontend && npm install"
+    description: "Install frontend dependencies"
+  - command: "alembic upgrade head"
+    description: "Run database migrations"

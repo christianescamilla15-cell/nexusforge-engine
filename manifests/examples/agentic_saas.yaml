@@ -1,0 +1,146 @@
+version: "1.0"
+generated_at: "2026-04-03T00:00:00Z"
+
+project:
+  name: "NexusForge Platform"
+  description: >
+    Full-stack AI SaaS platform with multi-agent orchestration for
+    enterprise automation. Features include conversational AI with
+    specialized agents, Stripe billing with usage metering, real-time
+    analytics, admin dashboard, and integrations with Slack, Google
+    Drive, and Notion. Designed for teams building autonomous AI
+    workflows at scale.
+  type: agentic_saas
+
+blueprint:
+  id: agentic_saas
+  name: "Agentic SaaS Platform"
+
+stack:
+  framework: fastapi
+  language: python
+  state_management: redis
+  database: postgresql
+  queue: celery
+  frontend: react
+
+modules:
+  - id: auth
+    name: "Authentication & Authorization"
+    requires: []
+  - id: observability
+    name: "Observability & Logging"
+    requires: []
+  - id: ai_chat
+    name: "AI Chat & Agent Orchestration"
+    requires:
+      - auth
+  - id: billing
+    name: "Billing & Subscription Management"
+    requires:
+      - auth
+  - id: analytics
+    name: "Analytics & Metrics Dashboard"
+    requires:
+      - auth
+  - id: notifications
+    name: "Notifications System"
+    requires:
+      - auth
+  - id: connectors
+    name: "External Connectors & Integrations"
+    requires:
+      - auth
+  - id: admin_panel
+    name: "Admin Panel"
+    requires:
+      - auth
+      - observability
+
+env_contract:
+  - name: DATABASE_URL
+    description: "PostgreSQL connection string"
+    example: "postgresql://user:pass@localhost:5432/nexusforge"
+    required: true
+  - name: REDIS_URL
+    description: "Redis connection string for state and caching"
+    example: "redis://localhost:6379/0"
+    required: true
+  - name: ANTHROPIC_API_KEY
+    description: "Claude API key for AI agent orchestration"
+    example: "sk-ant-..."
+    required: true
+  - name: SECRET_KEY
+    description: "Application secret for JWT signing"
+    example: "change-me-in-production"
+    required: true
+  - name: STRIPE_SECRET_KEY
+    description: "Stripe secret API key"
+    example: "sk_test_..."
+    required: true
+  - name: STRIPE_WEBHOOK_SECRET
+    description: "Stripe webhook signing secret"
+    example: "whsec_..."
+    required: true
+  - name: CELERY_BROKER_URL
+    description: "Celery broker URL"
+    example: "redis://localhost:6379/1"
+    required: false
+  - name: CORS_ORIGINS
+    description: "Allowed CORS origins"
+    example: "http://localhost:3000,http://localhost:5173"
+    required: false
+  - name: AI_MODEL
+    description: "Claude model to use"
+    example: "claude-sonnet-4-20250514"
+    required: false
+  - name: SLACK_BOT_TOKEN
+    description: "Slack bot OAuth token"
+    required: false
+  - name: GOOGLE_SERVICE_ACCOUNT_JSON
+    description: "Path to Google service account credentials"
+    required: false
+  - name: SENTRY_DSN
+    description: "Sentry DSN for error tracking"
+    required: false
+  - name: LOG_LEVEL
+    description: "Logging level"
+    example: "INFO"
+    required: false
+
+base_structure:
+  - src/
+  - src/agents/
+  - src/api/
+  - src/api/routes/
+  - src/api/middleware/
+  - src/core/
+  - src/db/
+  - src/db/models/
+  - src/db/migrations/
+  - src/services/
+  - src/schemas/
+  - src/tasks/
+  - src/utils/
+  - frontend/
+  - frontend/src/
+  - frontend/src/components/
+  - frontend/src/pages/
+  - frontend/src/hooks/
+  - frontend/src/services/
+  - frontend/public/
+  - tests/
+  - tests/unit/
+  - tests/integration/
+  - tests/e2e/
+  - docs/
+  - scripts/
+  - infra/
+
+post_generation_hooks:
+  - command: "pip install -r requirements.txt"
+    description: "Install Python dependencies"
+  - command: "cd frontend && npm install"
+    description: "Install frontend dependencies"
+  - command: "alembic upgrade head"
+    description: "Run database migrations"

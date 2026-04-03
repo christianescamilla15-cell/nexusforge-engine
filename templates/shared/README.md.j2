@@ -1,0 +1,92 @@
+# {{ PROJECT_NAME }}
+
+{{ PROJECT_DESCRIPTION }}
+
+## Stack
+
+- **Backend:** {{ FRAMEWORK }} ({{ LANGUAGE }})
+- **Database:** {{ DATABASE }}
+- **Frontend:** React + Vite
+
+## Modules
+
+{% for mod in MODULES %}
+- {{ mod }}
+{% endfor %}
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL 15+
+- Redis 7+
+- Node.js 18+
+
+### Installation
+
+```bash
+# Clone the repo
+git clone <repo-url>
+cd {{ PROJECT_NAME | lower | replace(' ', '-') }}
+
+# Install backend dependencies
+pip install -r requirements.txt
+
+# Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# Copy environment variables
+cp .env.example .env
+# Edit .env with your actual values
+
+# Run database migrations
+alembic upgrade head
+
+# Start the backend
+uvicorn src.main:app --reload --port 8000
+
+# Start the frontend (in another terminal)
+cd frontend && npm run dev
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the values:
+
+{% for var in ENV_VARS %}
+- `{{ var.name }}` {% if var.required %} **(required)**{% endif %} -- {{ var.description }}
+{% endfor %}
+
+## Project Structure
+
+```
+{{ PROJECT_NAME | lower | replace(' ', '-') }}/
+├── src/                    # Backend source code
+│   ├── api/               # API routes
+│   ├── core/              # Core business logic
+│   ├── db/                # Database models & migrations
+│   └── services/          # Service layer
+├── frontend/              # React frontend
+├── tests/                 # Test suite
+├── docs/                  # Documentation
+└── requirements.txt       # Python dependencies
+```
+
+{% if HAS_BILLING %}
+## Billing
+
+This project includes Stripe billing integration. Set up your Stripe
+account and configure the webhook endpoint at `/api/billing/webhooks`.
+{% endif %}
+
+{% if HAS_AI_CHAT %}
+## AI Chat
+
+This project includes AI chat powered by Claude API. Configure your
+`ANTHROPIC_API_KEY` to enable agent orchestration.
+{% endif %}
+
+## License
+
+Proprietary - All rights reserved.

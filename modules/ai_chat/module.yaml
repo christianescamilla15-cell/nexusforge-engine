@@ -1,0 +1,58 @@
+id: ai_chat
+name: "AI Chat & Agent Orchestration"
+description: >
+  Multi-agent AI chat system powered by Claude API. Supports
+  conversational AI with context management, tool use, streaming
+  responses, and agent specialization. Each agent can have its own
+  system prompt, tools, and personality.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+  platforms:
+    - fastapi
+
+requires:
+  - auth
+
+optional_dependencies:
+  - analytics
+  - observability
+
+env_contract:
+  - name: ANTHROPIC_API_KEY
+    description: "Anthropic API key for Claude"
+    required: true
+  - name: AI_MODEL
+    description: "Claude model to use"
+    required: false
+    default: "claude-sonnet-4-20250514"
+  - name: AI_MAX_TOKENS
+    description: "Maximum tokens per AI response"
+    required: false
+    default: "4096"
+
+injects:
+  folders:
+    - src/agents/
+  files:
+    - path: src/agents/__init__.py
+      content: "# AI Agents module"
+    - path: src/agents/router.py
+      description: "FastAPI router for chat endpoints with streaming"
+    - path: src/agents/models.py
+      description: "Conversation and Message SQLAlchemy models"
+    - path: src/agents/schemas.py
+      description: "Pydantic schemas for chat requests/responses"
+    - path: src/agents/orchestrator.py
+      description: "Agent orchestrator — routes to the right agent"
+    - path: src/agents/base_agent.py
+      description: "Base agent class with Claude API integration"
+    - path: src/agents/context_manager.py
+      description: "Manages conversation context and memory"
+    - path: src/db/migrations/004_conversations.sql
+      description: "SQL migration for conversations and messages tables"
+
+post_install_hooks:
+  - command: "pip install anthropic"
+    description: "Install Anthropic SDK"

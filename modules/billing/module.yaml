@@ -1,0 +1,58 @@
+id: billing
+name: "Billing & Subscription Management"
+description: >
+  Stripe-based billing with subscription plans, usage metering,
+  invoicing, and webhook handling. Supports free tier, pro, and
+  enterprise plans with configurable limits.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires:
+  - auth
+
+optional_dependencies:
+  - notifications
+  - analytics
+
+env_contract:
+  - name: STRIPE_SECRET_KEY
+    description: "Stripe secret API key"
+    required: true
+  - name: STRIPE_WEBHOOK_SECRET
+    description: "Stripe webhook signing secret"
+    required: true
+  - name: STRIPE_PRICE_PRO
+    description: "Stripe price ID for Pro plan"
+    required: false
+  - name: STRIPE_PRICE_ENTERPRISE
+    description: "Stripe price ID for Enterprise plan"
+    required: false
+
+injects:
+  folders:
+    - src/billing/
+  files:
+    - path: src/billing/__init__.py
+      content: "# Billing module"
+    - path: src/billing/router.py
+      description: "FastAPI router for checkout, portal, webhooks"
+    - path: src/billing/models.py
+      description: "Subscription and Invoice SQLAlchemy models"
+    - path: src/billing/schemas.py
+      description: "Pydantic schemas for billing operations"
+    - path: src/billing/service.py
+      description: "Stripe integration — create customer, manage subscriptions"
+    - path: src/billing/webhooks.py
+      description: "Stripe webhook event handlers"
+    - path: src/db/migrations/002_billing.sql
+      description: "SQL migration for subscriptions and invoices tables"
+
+post_install_hooks:
+  - command: "pip install stripe"
+    description: "Install Stripe SDK"

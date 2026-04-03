@@ -1,0 +1,50 @@
+id: admin_panel
+name: "Admin Panel"
+description: >
+  Administrative dashboard for managing users, viewing system health,
+  configuring modules, and reviewing audit logs. Restricted to admin
+  role users only.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+
+requires:
+  - auth
+  - observability
+
+optional_dependencies:
+  - analytics
+  - billing
+
+env_contract:
+  - name: ADMIN_EMAIL
+    description: "Default admin user email created on first run"
+    required: false
+    default: "admin@example.com"
+
+injects:
+  folders:
+    - src/admin/
+    - frontend/src/pages/admin/
+  files:
+    - path: src/admin/__init__.py
+      content: "# Admin module"
+    - path: src/admin/router.py
+      description: "FastAPI router for admin CRUD operations"
+    - path: src/admin/schemas.py
+      description: "Pydantic schemas for admin operations"
+    - path: src/admin/service.py
+      description: "Admin business logic — user management, config"
+    - path: frontend/src/pages/admin/Dashboard.jsx
+      description: "React admin dashboard component"
+    - path: frontend/src/pages/admin/Users.jsx
+      description: "React user management component"
+
+post_install_hooks:
+  - command: "echo 'Register admin router with admin role guard'"
+    description: "Reminder to add admin routes to main app"

@@ -1,0 +1,100 @@
+id: invoice_processor
+name: "Invoice Processing Pipeline"
+description: >
+  Document processing pipeline that extracts structured data from
+  invoices, receipts, and purchase orders using AI vision and NLP.
+  Validates extracted data against business rules, routes for
+  approval, and integrates with accounting systems.
+
+stack:
+  framework: fastapi
+  language: python
+  state_management: redis
+  database: postgresql
+  queue: celery
+  frontend: react
+
+base_structure:
+  - src/
+  - src/api/
+  - src/api/routes/
+  - src/api/middleware/
+  - src/core/
+  - src/extractors/
+  - src/validators/
+  - src/db/
+  - src/db/models/
+  - src/db/migrations/
+  - src/services/
+  - src/schemas/
+  - src/tasks/
+  - src/utils/
+  - src/pipelines/
+  - frontend/
+  - frontend/src/
+  - frontend/src/components/
+  - frontend/src/pages/
+  - frontend/src/hooks/
+  - frontend/src/services/
+  - frontend/public/
+  - tests/
+  - tests/unit/
+  - tests/integration/
+  - docs/
+  - scripts/
+  - uploads/
+
+required_modules:
+  - auth
+  - notifications
+  - observability
+
+optional_modules:
+  - analytics
+  - connectors
+  - billing
+  - admin_panel
+
+env_contract:
+  - name: DATABASE_URL
+    description: "PostgreSQL connection string"
+    example: "postgresql://user:pass@localhost:5432/invoices"
+    required: true
+  - name: REDIS_URL
+    description: "Redis connection string for caching and task queue"
+    example: "redis://localhost:6379/0"
+    required: true
+  - name: ANTHROPIC_API_KEY
+    description: "Claude API key for document extraction"
+    example: "sk-ant-..."
+    required: true
+  - name: SECRET_KEY
+    description: "Application secret for JWT signing"
+    example: "change-me-in-production"
+    required: true
+  - name: UPLOAD_DIR
+    description: "Directory for uploaded documents"
+    example: "./uploads"
+    required: true
+  - name: MAX_FILE_SIZE_MB
+    description: "Maximum upload file size in megabytes"
+    example: "25"
+    required: false
+  - name: OCR_ENGINE
+    description: "OCR engine to use (tesseract or cloud)"
+    example: "tesseract"
+    required: false
+  - name: LOG_LEVEL
+    description: "Logging level"
+    example: "INFO"
+    required: false
+
+post_generation_hooks:
+  - command: "pip install -r requirements.txt"
+    description: "Install Python dependencies"
+  - command: "cd frontend && npm install"
+    description: "Install frontend dependencies"
+  - command: "mkdir -p uploads"
+    description: "Create uploads directory"
+  - command: "alembic upgrade head"
+    description: "Run database migrations"

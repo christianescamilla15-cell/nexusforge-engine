@@ -1,0 +1,61 @@
+id: notifications
+name: "Notifications System"
+description: >
+  Multi-channel notification system supporting email, in-app,
+  and webhook notifications. Includes notification preferences,
+  templates, and delivery tracking.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires:
+  - auth
+
+optional_dependencies: []
+
+env_contract:
+  - name: SMTP_HOST
+    description: "SMTP server hostname"
+    required: false
+    default: "smtp.gmail.com"
+  - name: SMTP_PORT
+    description: "SMTP server port"
+    required: false
+    default: "587"
+  - name: SMTP_USER
+    description: "SMTP username"
+    required: false
+  - name: SMTP_PASSWORD
+    description: "SMTP password"
+    required: false
+  - name: FROM_EMAIL
+    description: "Default sender email address"
+    required: false
+    default: "noreply@example.com"
+
+injects:
+  folders:
+    - src/notifications/
+  files:
+    - path: src/notifications/__init__.py
+      content: "# Notifications module"
+    - path: src/notifications/router.py
+      description: "FastAPI router for notification endpoints"
+    - path: src/notifications/models.py
+      description: "Notification and Preference SQLAlchemy models"
+    - path: src/notifications/schemas.py
+      description: "Pydantic schemas for notification operations"
+    - path: src/notifications/service.py
+      description: "Notification dispatch — email, in-app, webhook"
+    - path: src/notifications/templates.py
+      description: "Notification template rendering"
+    - path: src/db/migrations/005_notifications.sql
+      description: "SQL migration for notifications table"
+
+post_install_hooks: []

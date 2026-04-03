@@ -1,0 +1,15 @@
+# ============================================
+# {{ PROJECT_NAME }} -- Environment Variables
+# ============================================
+# Copy this file to .env and fill in the values.
+# NEVER commit .env to version control.
+# ============================================
+
+{% for var in ENV_VARS %}
+# {{ var.description }}
+{% if var.required %}
+{{ var.name }}={{ var.get('example', '') }}
+{% else %}
+# {{ var.name }}={{ var.get('example', var.get('default', '')) }}
+{% endif %}
+{% endfor %}

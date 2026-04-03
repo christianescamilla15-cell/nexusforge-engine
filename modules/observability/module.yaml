@@ -1,0 +1,54 @@
+id: observability
+name: "Observability & Logging"
+description: >
+  Structured logging, health checks, and performance monitoring.
+  Provides /health and /metrics endpoints, request tracing with
+  correlation IDs, and configurable log outputs for production.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires: []
+
+optional_dependencies:
+  - analytics
+
+env_contract:
+  - name: LOG_LEVEL
+    description: "Logging level (DEBUG, INFO, WARNING, ERROR)"
+    required: false
+    default: "INFO"
+  - name: LOG_FORMAT
+    description: "Log format (json or text)"
+    required: false
+    default: "json"
+  - name: SENTRY_DSN
+    description: "Sentry DSN for error tracking"
+    required: false
+
+injects:
+  folders:
+    - src/observability/
+  files:
+    - path: src/observability/__init__.py
+      content: "# Observability module"
+    - path: src/observability/logging.py
+      description: "Structured logging configuration"
+    - path: src/observability/health.py
+      description: "Health check endpoint with dependency checks"
+    - path: src/observability/metrics.py
+      description: "Prometheus-compatible metrics endpoint"
+    - path: src/observability/middleware.py
+      description: "Request tracing middleware with correlation IDs"
+    - path: src/observability/config.py
+      description: "Observability configuration"
+
+post_install_hooks:
+  - command: "pip install structlog"
+    description: "Install structured logging library"

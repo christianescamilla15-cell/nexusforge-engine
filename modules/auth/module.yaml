@@ -1,0 +1,56 @@
+id: auth
+name: "Authentication & Authorization"
+description: >
+  JWT-based authentication with role-based access control (RBAC).
+  Includes user registration, login, password reset, API key management,
+  and middleware for protecting routes.
+
+compatible_with:
+  project_types:
+    - agentic_saas
+    - ticket_system
+    - invoice_processor
+  platforms:
+    - fastapi
+    - flask
+
+requires: []
+
+optional_dependencies:
+  - notifications
+
+env_contract:
+  - name: SECRET_KEY
+    description: "Secret key for JWT token signing"
+    required: true
+  - name: ACCESS_TOKEN_EXPIRE_MINUTES
+    description: "JWT access token expiry in minutes"
+    required: false
+    default: "30"
+  - name: REFRESH_TOKEN_EXPIRE_DAYS
+    description: "JWT refresh token expiry in days"
+    required: false
+    default: "7"
+
+injects:
+  folders:
+    - src/auth/
+  files:
+    - path: src/auth/__init__.py
+      content: "# Auth module"
+    - path: src/auth/router.py
+      description: "FastAPI router with login, register, refresh endpoints"
+    - path: src/auth/models.py
+      description: "User and Role SQLAlchemy models"
+    - path: src/auth/schemas.py
+      description: "Pydantic schemas for auth requests/responses"
+    - path: src/auth/service.py
+      description: "Auth business logic — hash passwords, create tokens"
+    - path: src/auth/dependencies.py
+      description: "FastAPI dependencies — get_current_user, require_role"
+    - path: src/db/migrations/001_users.sql
+      description: "SQL migration for users and roles tables"
+
+post_install_hooks:
+  - command: "echo 'Add auth middleware to main app router'"
+    description: "Reminder to register auth router in main.py"
