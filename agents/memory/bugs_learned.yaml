@@ -141,3 +141,74 @@ bugs:
     fix: "Use request.state.user_id from middleware consistently"
     preventing_agents: [architect, standards_enforcer, debt_detector]
     rule: "Auth parsing should happen ONCE (middleware). Routes should read from request.state, not re-parse."
+
+  # ROUND 2 — Crash Bugs (Frontend)
+  - id: BUG-014
+    title: ".toFixed() and .toLocaleString() on nullable values cause white screen"
+    severity: crash
+    category: frontend
+    file: "ExecutionListPage, ExecutionDetailPage, StepTimeline, AutomationDashboard"
+    description: "Multiple components call .toFixed() or .toLocaleString() on values that can be null/undefined from API"
+    fix: "Always use Number(value ?? 0).toFixed(N) or (value ?? 0).toLocaleString()"
+    preventing_agents: [sentinel, contract_validator, field_mapper]
+    rule: "NEVER call .toFixed() or .toLocaleString() without null guard. Always use (value ?? 0) pattern."
+
+  - id: BUG-015
+    title: "node.agent_type.toUpperCase() crashes if agent_type undefined"
+    severity: crash
+    category: frontend
+    file: "WorkflowBuilderPage.jsx:79"
+    description: "SVG node renders agent_type.toUpperCase() but nodes can have undefined agent_type"
+    fix: "(node.agent_type || 'custom').toUpperCase()"
+    preventing_agents: [sentinel, contract_validator]
+    rule: "NEVER access properties of potentially undefined values without fallback. Use (value || default) pattern."
+
+  - id: BUG-016
+    title: "useAPI hook returns full response envelope instead of data"
+    severity: crash
+    category: frontend
+    file: "shared/hooks/useAPI.js:19"
+    description: "setData(d) stores {data, error, isDemo} instead of d.data — consumers crash on .map()"
+    fix: "setData(d?.data ?? d)"
+    preventing_agents: [contract_validator, diff_checker]
+    rule: "API wrapper hooks must unwrap the response envelope. Consumers expect raw data, not {data, error}."
+
+  - id: BUG-017
+    title: "Production alert() calls left in WorkflowDetailPage"
+    severity: error
+    category: cleanup
+    file: "WorkflowDetailPage.jsx:94,112,113"
+    description: "Debug alert() calls block UI and leak internal data in production"
+    fix: "Remove all alert() calls from production code"
+    preventing_agents: [debt_detector, standards_enforcer]
+    rule: "NEVER commit alert() or console.log debug calls to production. Use proper logging or remove."
+
+  - id: BUG-018
+    title: "Delete operations don't check fetchAPI error response"
+    severity: error
+    category: frontend
+    file: "ExecutionListPage, WorkflowListPage"
+    description: "After DELETE fetch, UI removes item from state even if backend returned error"
+    fix: "Check res.error before modifying state; revert on failure"
+    preventing_agents: [contract_validator, standards_enforcer]
+    rule: "EVERY fetchAPI call must check res.error before acting on success. Never assume success."
+
+  - id: BUG-019
+    title: "ConnectorHubPage parses response wrong — users never see saved connectors"
+    severity: error
+    category: integration
+    file: "ConnectorHubPage.jsx:33"
+    description: "Backend returns {connectors: [...]} but frontend checks Array.isArray(data) which is false"
+    fix: "connRes.data?.connectors || (Array.isArray(connRes.data) ? connRes.data : [])"
+    preventing_agents: [contract_validator, field_mapper, diff_checker]
+    rule: "ALWAYS verify the exact response shape from the backend. Use console.log(res.data) during development."
+
+  - id: BUG-020
+    title: "WebSocket JSON.parse without try/catch"
+    severity: crash
+    category: frontend
+    file: "api/websocket.js:4"
+    description: "If server sends non-JSON data, JSON.parse crashes the WebSocket handler"
+    fix: "Wrap in try/catch"
+    preventing_agents: [sentinel, runtime_prober]
+    rule: "ALWAYS wrap JSON.parse in try/catch. External data is never guaranteed to be valid JSON."
