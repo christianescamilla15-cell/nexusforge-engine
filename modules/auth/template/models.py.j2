@@ -1,0 +1,44 @@
+"""User model for {{ PROJECT_NAME }}."""
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+class User(BaseModel):
+    """Core user model stored in the database.
+
+    Attributes:
+        id: Unique user identifier (UUID as string).
+        email: User's email address (unique).
+        password_hash: bcrypt-hashed password — never expose in API responses.
+        name: Optional display name.
+        role: User role for RBAC (user, admin, superadmin).
+        is_active: Whether the account is enabled.
+        created_at: Timestamp of account creation.
+        updated_at: Timestamp of last profile update.
+    """
+
+    id: str = Field(..., description="UUID primary key")
+    email: EmailStr = Field(..., description="Unique email address")
+    password_hash: str = Field(..., description="bcrypt hashed password")
+    name: Optional[str] = Field(None, description="Display name")
+    role: str = Field("user", description="RBAC role: user | admin | superadmin")
+    is_active: bool = Field(True, description="Account enabled flag")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        """Pydantic model configuration."""
+
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "email": "user@example.com",
+                "name": "John Doe",
+                "role": "user",
+                "is_active": True,
+            }
+        }

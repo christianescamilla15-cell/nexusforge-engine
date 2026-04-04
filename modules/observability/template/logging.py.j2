@@ -1,0 +1,78 @@
+"""Structured logging configuration for {{ PROJECT_NAME }}.
+
+Uses structlog for JSON-formatted structured logging in production
+and human-readable colored output in development.
+"""
+
+import logging
+import sys
+
+import structlog
+
+from .config import config
+
+
+def setup_logging() -> None:
+    """Configure structured logging based on environment settings.
+
+    Call this once at application startup. Configures both structlog
+    and the standard library logging module.
+    """
+    # Map string level to logging constant
+    level = getattr(logging, config.log_level, logging.INFO)
+
+    # Shared processors for all log entries
+    shared_processors: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+
+    if config.log_format == "json":
+        # Production: JSON output
+        renderer = structlog.processors.JSONRenderer()
+    else:
+        # Development: colored console output
+        renderer = structlog.dev.ConsoleRenderer(colors=True)
+
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    # Configure standard library logging
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=shared_processors,
+    )
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(level)
+
+    # Silence noisy third-party loggers
+    for logger_name in ("uvicorn.access", "httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
+def get_logger(name: str) -> structlog.stdlib.BoundLogger:
+    """Get a structured logger instance.
+
+    Args:
+        name: Logger name (usually __name__).
+
+    Returns:
+        A bound structlog logger.
+    """
+    return structlog.get_logger(name)

@@ -1,0 +1,129 @@
+"""Tests for ticket creation and classification."""
+import json
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from main import app
+from src.tickets.models import Urgency, Category, TicketClassification
+from src.tickets.classifier import classify_ticket, _parse_response
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
+async def client():
+    """Async test client for the FastAPI app."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+# -- Unit tests for classifier helpers --
+
+def test_parse_valid_json():
+    raw = '{"urgency": "high", "category": "billing", "confidence": 0.9, "suggested_team": "billing-ops"}'
+    result = _parse_response(raw)
+    assert result["urgency"] == "high"
+    assert result["category"] == "billing"
+    assert result["confidence"] == 0.9
+
+
+def test_parse_json_with_markdown_fences():
+    raw = '```json\n{"urgency": "low", "category": "general", "confidence": 0.7, "suggested_team": "support-tier-1"}\n```'
+    result = _parse_response(raw)
+    assert result["urgency"] == "low"
+    assert result["category"] == "general"
+
+
+def test_parse_invalid_json_returns_defaults():
+    result = _parse_response("this is not json")
+    assert result["urgency"] == "medium"
+    assert result["category"] == "general"
+    assert result["confidence"] == 0.0
+
+
+# -- Integration-style tests with mocked LLM --
+
+@pytest.mark.anyio
+async def test_classify_ticket_returns_valid_classification():
+    mock_response = json.dumps({
+        "urgency": "critical",
+        "category": "technical",
+        "confidence": 0.95,
+        "suggested_team": "platform-eng",
+    })
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+    with patch("src.tickets.classifier.anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_msg = AsyncMock()
+        mock_msg.content = [AsyncMock(text=mock_response)]
+        mock_client.messages.create = AsyncMock(return_value=mock_msg)
+
+        result = await classify_ticket("Server down", "Production API returning 500 errors")
+{% else %}
+    with patch("src.tickets.classifier.openai.AsyncOpenAI") as mock_cls:
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_choice = AsyncMock()
+        mock_choice.message.content = mock_response
+        mock_resp = AsyncMock()
+        mock_resp.choices = [mock_choice]
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+
+        result = await classify_ticket("Server down", "Production API returning 500 errors")
+{% endif %}
+
+    assert isinstance(result, TicketClassification)
+    assert result.urgency == Urgency.critical
+    assert result.category == Category.technical
+    assert result.confidence == 0.95
+
+
+@pytest.mark.anyio
+async def test_create_ticket_endpoint(client: AsyncClient):
+    mock_classification = TicketClassification(
+        urgency=Urgency.high,
+        category=Category.billing,
+        confidence=0.85,
+        suggested_team="billing-ops",
+    )
+    mock_row = {
+        "id": 1,
+        "title": "Charge issue",
+        "description": "I was double charged for my subscription",
+        "urgency": "high",
+        "category": "billing",
+        "status": "open",
+        "assigned_team": "billing-ops",
+        "ai_response": "We understand your concern about the charge.",
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "updated_at": None,
+    }
+
+    with (
+        patch("src.tickets.router.classify_ticket", return_value=mock_classification),
+        patch("src.tickets.router.generate_response", return_value="We understand your concern about the charge."),
+        patch("src.tickets.router.get_pool") as mock_pool,
+    ):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value=mock_row)
+        mock_pool.return_value.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.return_value.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        resp = await client.post("/api/tickets/create", json={
+            "title": "Charge issue",
+            "description": "I was double charged for my subscription",
+        })
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["urgency"] == "high"
+    assert data["category"] == "billing"
+    assert data["assigned_team"] == "billing-ops"

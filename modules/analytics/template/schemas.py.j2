@@ -1,0 +1,99 @@
+"""Pydantic schemas for the analytics module in {{ PROJECT_NAME }}."""
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class TrackEventRequest(BaseModel):
+    """Request to track an analytics event.
+
+    Attributes:
+        event_name: Name/type of the event (e.g., 'page_view').
+        properties: Arbitrary key-value metadata attached to the event.
+        user_id: Explicit user ID (used when auth module is not present).
+    """
+
+    event_name: str = Field(..., min_length=1, max_length=100, description="Event name")
+    properties: Optional[dict[str, Any]] = Field(
+        None, description="Event metadata"
+    )
+    user_id: Optional[str] = Field(None, description="User ID (no-auth fallback)")
+
+
+class TrackEventResponse(BaseModel):
+    """Response after successfully tracking an event.
+
+    Attributes:
+        event_id: Unique ID assigned to the recorded event.
+        status: Confirmation status ('recorded').
+    """
+
+    event_id: str = Field(..., description="Generated event ID")
+    status: str = Field("recorded", description="Recording status")
+
+
+class EventItem(BaseModel):
+    """A single analytics event in list responses.
+
+    Attributes:
+        id: Event UUID.
+        user_id: Who triggered it.
+        event_name: Event type.
+        properties: Event metadata.
+        timestamp: When the event occurred.
+    """
+
+    id: str
+    user_id: str
+    event_name: str
+    properties: dict[str, Any] = Field(default_factory=dict)
+    timestamp: str
+
+
+class TopEvent(BaseModel):
+    """An event type with its occurrence count.
+
+    Attributes:
+        event_name: The event type name.
+        count: Number of occurrences.
+    """
+
+    event_name: str
+    count: int
+
+
+class AnalyticsSummary(BaseModel):
+    """Aggregated analytics summary over a time period.
+
+    Attributes:
+        total_events: Total number of events in the period.
+        unique_users: Number of distinct users.
+        period_days: Number of days covered.
+        top_events: Most frequent event types.
+        daily_counts: Events per day (YYYY-MM-DD -> count).
+    """
+
+    total_events: int = Field(0, description="Total events in period")
+    unique_users: int = Field(0, description="Unique users in period")
+    period_days: int = Field(30, description="Days covered")
+    top_events: list[TopEvent] = Field(default_factory=list, description="Top events")
+    daily_counts: dict[str, int] = Field(
+        default_factory=dict, description="Daily event counts"
+    )
+
+
+class EventList(BaseModel):
+    """Paginated list of analytics events.
+
+    Attributes:
+        events: List of event items.
+        total: Total count matching the filter.
+        limit: Page size.
+        offset: Current offset.
+    """
+
+    events: list[EventItem] = Field(default_factory=list)
+    total: int = Field(0)
+    limit: int = Field(100)
+    offset: int = Field(0)

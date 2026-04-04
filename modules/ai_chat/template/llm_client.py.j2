@@ -1,0 +1,275 @@
+"""Multi-provider LLM client for {{ PROJECT_NAME }}.
+
+Supports Groq, Claude (Anthropic), and OpenAI with automatic fallback.
+The provider is selected via the LLM_PROVIDER env var (default: anthropic).
+All API keys must come from environment variables.
+"""
+
+import os
+from abc import ABC, abstractmethod
+from typing import Any, AsyncIterator, Optional
+
+# ---------------------------------------------------------------------------
+# Configuration from environment
+# ---------------------------------------------------------------------------
+LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "{{ LLM_PROVIDER | default('anthropic') }}")
+AI_MODEL: str = os.getenv("AI_MODEL", "claude-sonnet-4-20250514")
+AI_MAX_TOKENS: int = int(os.getenv("AI_MAX_TOKENS", "4096"))
+
+
+class BaseLLMClient(ABC):
+    """Abstract base class for LLM provider clients.
+
+    All providers must implement complete() and stream().
+    """
+
+    @abstractmethod
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """Send messages and return a complete response.
+
+        Args:
+            messages: List of {'role': ..., 'content': ...} dicts.
+
+        Returns:
+            The assistant's response text.
+        """
+        ...
+
+    @abstractmethod
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Send messages and stream the response in chunks.
+
+        Args:
+            messages: List of {'role': ..., 'content': ...} dicts.
+
+        Yields:
+            Text chunks as they arrive from the provider.
+        """
+        ...
+
+
+class AnthropicClient(BaseLLMClient):
+    """Claude API client via the Anthropic SDK."""
+
+    def __init__(self) -> None:
+        """Initialize with API key from environment."""
+        import anthropic
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY env var is required")
+        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._model = os.getenv("AI_MODEL", "claude-sonnet-4-20250514")
+
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """Send messages to Claude and return the full response.
+
+        Args:
+            messages: Conversation messages.
+
+        Returns:
+            The assistant's complete reply.
+        """
+        system_msg = None
+        chat_msgs = []
+        for m in messages:
+            if m["role"] == "system":
+                system_msg = m["content"]
+            else:
+                chat_msgs.append(m)
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": AI_MAX_TOKENS,
+            "messages": chat_msgs,
+        }
+        if system_msg:
+            kwargs["system"] = system_msg
+
+        response = await self._client.messages.create(**kwargs)
+        return response.content[0].text
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Stream Claude's response chunk by chunk.
+
+        Args:
+            messages: Conversation messages.
+
+        Yields:
+            Text chunks.
+        """
+        system_msg = None
+        chat_msgs = []
+        for m in messages:
+            if m["role"] == "system":
+                system_msg = m["content"]
+            else:
+                chat_msgs.append(m)
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": AI_MAX_TOKENS,
+            "messages": chat_msgs,
+        }
+        if system_msg:
+            kwargs["system"] = system_msg
+
+        async with self._client.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                yield text
+
+
+class OpenAIClient(BaseLLMClient):
+    """OpenAI API client."""
+
+    def __init__(self) -> None:
+        """Initialize with API key from environment."""
+        import openai
+
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY env var is required")
+        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._model = os.getenv("AI_MODEL", "gpt-4o")
+
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """Send messages to OpenAI and return the full response.
+
+        Args:
+            messages: Conversation messages.
+
+        Returns:
+            The assistant's complete reply.
+        """
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=AI_MAX_TOKENS,
+        )
+        return response.choices[0].message.content or ""
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Stream OpenAI's response chunk by chunk.
+
+        Args:
+            messages: Conversation messages.
+
+        Yields:
+            Text chunks.
+        """
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=AI_MAX_TOKENS,
+            stream=True,
+        )
+        async for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
+
+class GroqClient(BaseLLMClient):
+    """Groq API client (OpenAI-compatible)."""
+
+    def __init__(self) -> None:
+        """Initialize with API key from environment."""
+        import openai
+
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY env var is required")
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
+        )
+        self._model = os.getenv("AI_MODEL", "llama-3.3-70b-versatile")
+
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """Send messages to Groq and return the full response.
+
+        Args:
+            messages: Conversation messages.
+
+        Returns:
+            The assistant's complete reply.
+        """
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=AI_MAX_TOKENS,
+        )
+        return response.choices[0].message.content or ""
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Stream Groq's response chunk by chunk.
+
+        Args:
+            messages: Conversation messages.
+
+        Yields:
+            Text chunks.
+        """
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=AI_MAX_TOKENS,
+            stream=True,
+        )
+        async for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
+
+# ---------------------------------------------------------------------------
+# Provider registry with fallback chain
+# ---------------------------------------------------------------------------
+
+_PROVIDERS: dict[str, type[BaseLLMClient]] = {
+    "anthropic": AnthropicClient,
+    "openai": OpenAIClient,
+    "groq": GroqClient,
+}
+
+_FALLBACK_ORDER: list[str] = ["anthropic", "openai", "groq"]
+
+_cached_client: Optional[BaseLLMClient] = None
+
+
+def get_llm_client() -> BaseLLMClient:
+    """Get or create the LLM client for the configured provider.
+
+    Tries the configured LLM_PROVIDER first, then falls back through
+    the fallback chain until one succeeds.
+
+    Returns:
+        An initialized LLM client instance.
+
+    Raises:
+        RuntimeError: If no provider could be initialized.
+    """
+    global _cached_client
+    if _cached_client is not None:
+        return _cached_client
+
+    # Try configured provider first
+    providers_to_try = [LLM_PROVIDER] + [
+        p for p in _FALLBACK_ORDER if p != LLM_PROVIDER
+    ]
+
+    errors: list[str] = []
+    for provider_name in providers_to_try:
+        cls = _PROVIDERS.get(provider_name)
+        if cls is None:
+            continue
+        try:
+            _cached_client = cls()
+            return _cached_client
+        except (ImportError, ValueError) as exc:
+            errors.append(f"{provider_name}: {exc}")
+
+    raise RuntimeError(
+        f"No LLM provider could be initialized. Tried: {providers_to_try}. "
+        f"Errors: {'; '.join(errors)}"
+    )

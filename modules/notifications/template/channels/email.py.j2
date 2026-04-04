@@ -1,0 +1,101 @@
+"""Email notification channel for {{ PROJECT_NAME }}.
+
+Supports SMTP (Gmail, etc.) and Resend API as transports.
+All credentials come from environment variables.
+"""
+
+import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Any, Optional
+
+# ---------------------------------------------------------------------------
+# Configuration from environment — never hardcode credentials
+# ---------------------------------------------------------------------------
+SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER: str | None = os.getenv("SMTP_USER")
+SMTP_PASSWORD: str | None = os.getenv("SMTP_PASSWORD")
+FROM_EMAIL: str = os.getenv("FROM_EMAIL", "noreply@example.com")
+
+# Optional: Resend API as an alternative transport
+RESEND_API_KEY: str | None = os.getenv("RESEND_API_KEY")
+
+
+async def send_email(
+    recipient: str,
+    subject: str,
+    body: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    """Send an email notification.
+
+    Tries Resend API first if configured, falls back to SMTP.
+
+    Args:
+        recipient: Recipient email address.
+        subject: Email subject line.
+        body: Email body (plain text).
+        metadata: Optional metadata (currently unused for email).
+
+    Raises:
+        RuntimeError: If neither SMTP nor Resend is configured.
+        smtplib.SMTPException: If SMTP delivery fails.
+    """
+    if RESEND_API_KEY:
+        await _send_via_resend(recipient, subject, body)
+    elif SMTP_USER and SMTP_PASSWORD:
+        await _send_via_smtp(recipient, subject, body)
+    else:
+        raise RuntimeError(
+            "Email not configured: set SMTP_USER/SMTP_PASSWORD or RESEND_API_KEY"
+        )
+
+
+async def _send_via_smtp(recipient: str, subject: str, body: str) -> None:
+    """Send email via SMTP.
+
+    Args:
+        recipient: Recipient email address.
+        subject: Email subject.
+        body: Email body text.
+    """
+    msg = MIMEMultipart("alternative")
+    msg["From"] = FROM_EMAIL
+    msg["To"] = recipient
+    msg["Subject"] = subject
+
+    # Attach plain text and HTML versions
+    msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(f"<html><body><p>{body}</p></body></html>", "html"))
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+async def _send_via_resend(recipient: str, subject: str, body: str) -> None:
+    """Send email via Resend API.
+
+    Args:
+        recipient: Recipient email address.
+        subject: Email subject.
+        body: Email body text.
+
+    Raises:
+        ImportError: If the resend package is not installed.
+        Exception: If the Resend API returns an error.
+    """
+    import resend
+
+    resend.api_key = RESEND_API_KEY
+    resend.Emails.send(
+        {
+            "from": FROM_EMAIL,
+            "to": [recipient],
+            "subject": subject,
+            "text": body,
+        }
+    )

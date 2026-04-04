@@ -1,0 +1,154 @@
+"""DAG executor -- runs workflow steps with parallel group scheduling."""
+import asyncio
+import time
+from typing import Any
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from src.agents.base import AgentResult
+from src.agents.registry import get_agent
+from src.engine.dag import parse_dag, topological_sort, DAGNode, DAGValidationError
+
+router = APIRouter()
+
+
+class WorkflowRequest(BaseModel):
+    """Request body for workflow execution."""
+    steps: list[dict[str, Any]]
+    initial_input: dict[str, Any] = {}
+
+
+class StepResult(BaseModel):
+    """Result of a single step execution."""
+    step_id: str
+    agent_id: str
+    success: bool
+    output: Any = None
+    error: str | None = None
+    duration_ms: float = 0.0
+
+
+class WorkflowResult(BaseModel):
+    """Complete workflow execution result."""
+    run_id: str
+    success: bool
+    total_duration_ms: float
+    steps: list[StepResult]
+    final_output: dict[str, Any]
+
+
+async def execute_workflow(
+    steps: list[dict[str, Any]],
+    initial_input: dict[str, Any],
+) -> WorkflowResult:
+    """Execute a workflow DAG with parallel group scheduling.
+
+    Parses the step definitions into a DAG, sorts into parallel groups,
+    and executes each group concurrently. Outputs from earlier steps are
+    available to later steps via the input_map.
+
+    Args:
+        steps: List of step definitions.
+        initial_input: Input data for steps with no dependencies.
+
+    Returns:
+        WorkflowResult with per-step results and final output.
+    """
+    run_id = str(uuid4())
+    start = time.perf_counter()
+
+    nodes = parse_dag(steps)
+    groups = topological_sort(nodes)
+
+    all_results: list[StepResult] = []
+    outputs: dict[str, Any] = {"_initial": initial_input}
+    workflow_success = True
+
+    for group in groups:
+        tasks = [
+            _execute_step(node, outputs, initial_input)
+            for node in group
+        ]
+        group_results = await asyncio.gather(*tasks)
+
+        for result in group_results:
+            all_results.append(result)
+            if result.success:
+                outputs[result.step_id] = result.output
+            else:
+                workflow_success = False
+
+    total_ms = (time.perf_counter() - start) * 1000
+    final_output = {k: v for k, v in outputs.items() if k != "_initial"}
+
+    return WorkflowResult(
+        run_id=run_id,
+        success=workflow_success,
+        total_duration_ms=round(total_ms, 2),
+        steps=all_results,
+        final_output=final_output,
+    )
+
+
+async def _execute_step(
+    node: DAGNode,
+    outputs: dict[str, Any],
+    initial_input: dict[str, Any],
+) -> StepResult:
+    """Execute a single DAG step.
+
+    Resolves input_map references from previous step outputs,
+    then runs the agent.
+
+    Args:
+        node: The DAG node to execute.
+        outputs: Accumulated outputs from previous steps.
+        initial_input: The workflow's initial input data.
+    """
+    # Build input by resolving input_map references
+    step_input: dict[str, Any] = dict(initial_input)
+    for target_key, source_ref in node.input_map.items():
+        # source_ref format: "step_id.field" or "step_id"
+        parts = source_ref.split(".", 1)
+        source_step = parts[0]
+        source_data = outputs.get(source_step, {})
+        if len(parts) == 2 and isinstance(source_data, dict):
+            step_input[target_key] = source_data.get(parts[1])
+        else:
+            step_input[target_key] = source_data
+
+    # Merge node config
+    step_input.update(node.config)
+
+    try:
+        agent = get_agent(node.agent_id)
+    except KeyError as exc:
+        return StepResult(
+            step_id=node.id,
+            agent_id=node.agent_id,
+            success=False,
+            error=str(exc),
+        )
+
+    result: AgentResult = await agent.execute(step_input)
+    return StepResult(
+        step_id=node.id,
+        agent_id=node.agent_id,
+        success=result.success,
+        output=result.output,
+        error=result.error,
+        duration_ms=result.duration_ms,
+    )
+
+
+# -- API routes --
+
+@router.post("/run", response_model=WorkflowResult)
+async def api_run_workflow(req: WorkflowRequest) -> WorkflowResult:
+    """Execute a workflow DAG and return results."""
+    try:
+        return await execute_workflow(req.steps, req.initial_input)
+    except DAGValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

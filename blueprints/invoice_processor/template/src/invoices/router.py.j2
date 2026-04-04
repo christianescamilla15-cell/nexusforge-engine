@@ -1,0 +1,118 @@
+"""Invoice processing routes."""
+import json
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from src.invoices.models import InvoiceResponse, InvoiceListResponse, InvoiceStatus
+from src.invoices.extractor import extract_invoice_fields
+from src.invoices.validator import validate_invoice
+from src.db.client import get_pool
+
+router = APIRouter()
+
+
+@router.post("/upload", response_model=InvoiceResponse, status_code=201)
+async def upload_invoice(file: UploadFile = File(...)) -> InvoiceResponse:
+    """Upload a document, extract fields with AI, validate, and store."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    content = await file.read()
+    text = content.decode("utf-8", errors="replace")
+
+    extraction = await extract_invoice_fields(text, file.filename)
+    validation_errors = validate_invoice(extraction)
+    status = InvoiceStatus.validated if not validation_errors else InvoiceStatus.rejected
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO invoices (
+                vendor_name, invoice_number, invoice_date, due_date,
+                subtotal, tax, total_amount, currency, status,
+                source_filename, validation_errors
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING *
+            """,
+            extraction.vendor_name,
+            extraction.invoice_number,
+            extraction.invoice_date,
+            extraction.due_date,
+            float(extraction.subtotal),
+            float(extraction.tax) if extraction.tax else None,
+            float(extraction.total_amount),
+            extraction.currency,
+            status.value,
+            file.filename,
+            json.dumps(validation_errors),
+        )
+
+        line_items_data = []
+        for item in extraction.line_items:
+            li_row = await conn.fetchrow(
+                """
+                INSERT INTO line_items (invoice_id, description, quantity, unit_price, total)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING *
+                """,
+                row["id"],
+                item.description,
+                float(item.quantity),
+                float(item.unit_price),
+                float(item.total),
+            )
+            line_items_data.append(dict(li_row))
+
+    result = dict(row)
+    result["line_items"] = line_items_data
+    result["validation_errors"] = validation_errors
+    return InvoiceResponse(**result)
+
+
+@router.get("/", response_model=InvoiceListResponse)
+async def list_invoices(
+    status: InvoiceStatus | None = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> InvoiceListResponse:
+    """List invoices with optional status filter and pagination."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        where = "WHERE status = $1" if status else ""
+        params: list = [status.value] if status else []
+
+        total = await conn.fetchval(f"SELECT count(*) FROM invoices {where}", *params)
+
+        idx = len(params) + 1
+        rows = await conn.fetch(
+            f"SELECT * FROM invoices {where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+            *params, limit, offset,
+        )
+
+    invoices = []
+    for r in rows:
+        inv = dict(r)
+        inv["validation_errors"] = json.loads(inv.get("validation_errors", "[]"))
+        inv["line_items"] = []
+        invoices.append(InvoiceResponse(**inv))
+
+    return InvoiceListResponse(invoices=invoices, total=total)
+
+
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+async def get_invoice(invoice_id: int) -> InvoiceResponse:
+    """Retrieve a single invoice with its line items."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM invoices WHERE id = $1", invoice_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        li_rows = await conn.fetch(
+            "SELECT * FROM line_items WHERE invoice_id = $1 ORDER BY id", invoice_id
+        )
+
+    result = dict(row)
+    result["line_items"] = [dict(li) for li in li_rows]
+    result["validation_errors"] = json.loads(result.get("validation_errors", "[]"))
+    return InvoiceResponse(**result)

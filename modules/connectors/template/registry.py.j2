@@ -1,0 +1,124 @@
+"""Connector registry for {{ PROJECT_NAME }}.
+
+Central registry for discovering, instantiating, and managing connectors.
+"""
+
+from typing import Any, Optional
+
+from .base import ConnectorBase
+from .slack import SlackConnector
+from .webhook import WebhookConnector
+from .google_drive import GoogleDriveConnector
+from .notion import NotionConnector
+
+# Registry of available connector types
+_CONNECTOR_TYPES: dict[str, type[ConnectorBase]] = {
+    "slack": SlackConnector,
+    "webhook": WebhookConnector,
+    "google_drive": GoogleDriveConnector,
+    "notion": NotionConnector,
+}
+
+# Active connector instances
+_active_connectors: dict[str, ConnectorBase] = {}
+
+
+def get_available_types() -> list[dict[str, str]]:
+    """List all available connector types.
+
+    Returns:
+        List of dicts with 'type' and 'name' for each connector.
+    """
+    result = []
+    for ctype, cls in _CONNECTOR_TYPES.items():
+        result.append({
+            "type": ctype,
+            "name": cls.name if hasattr(cls, "name") else ctype,
+        })
+    return result
+
+
+def create_connector(
+    connector_type: str,
+    connector_id: str,
+    config: Optional[dict[str, Any]] = None,
+) -> ConnectorBase:
+    """Create and register a new connector instance.
+
+    Args:
+        connector_type: Type of connector (slack, webhook, etc.).
+        connector_id: Unique ID for this instance.
+        config: Connector-specific configuration.
+
+    Returns:
+        The created connector instance.
+
+    Raises:
+        ValueError: If the connector type is unknown.
+        ValueError: If a connector with that ID already exists.
+    """
+    cls = _CONNECTOR_TYPES.get(connector_type)
+    if cls is None:
+        raise ValueError(
+            f"Unknown connector type: {connector_type}. "
+            f"Available: {list(_CONNECTOR_TYPES.keys())}"
+        )
+
+    if connector_id in _active_connectors:
+        raise ValueError(f"Connector already exists with ID: {connector_id}")
+
+    connector = cls(config=config)
+    _active_connectors[connector_id] = connector
+    return connector
+
+
+def get_connector(connector_id: str) -> Optional[ConnectorBase]:
+    """Retrieve an active connector by ID.
+
+    Args:
+        connector_id: The connector's unique ID.
+
+    Returns:
+        The connector instance, or None if not found.
+    """
+    return _active_connectors.get(connector_id)
+
+
+def list_connectors() -> list[dict[str, Any]]:
+    """List all active connector instances.
+
+    Returns:
+        List of connector metadata dicts.
+    """
+    return [
+        {"id": cid, **conn.to_dict()}
+        for cid, conn in _active_connectors.items()
+    ]
+
+
+async def remove_connector(connector_id: str) -> bool:
+    """Disconnect and remove a connector.
+
+    Args:
+        connector_id: The connector to remove.
+
+    Returns:
+        True if the connector was found and removed.
+    """
+    connector = _active_connectors.pop(connector_id, None)
+    if connector is None:
+        return False
+
+    if connector.is_connected:
+        await connector.disconnect()
+    return True
+
+
+def register_type(connector_type: str, cls: type[ConnectorBase]) -> None:
+    """Register a custom connector type.
+
+    Args:
+        connector_type: Identifier for the new connector type.
+        cls: The connector class (must inherit ConnectorBase).
+    """
+    _CONNECTOR_TYPES[connector_type] = cls

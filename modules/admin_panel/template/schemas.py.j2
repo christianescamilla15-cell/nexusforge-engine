@@ -1,0 +1,73 @@
+"""Pydantic schemas for the admin panel module in {{ PROJECT_NAME }}."""
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class AdminUserItem(BaseModel):
+    """User profile as seen by admin.
+
+    Attributes:
+        id: User UUID.
+        email: User email.
+        name: Display name.
+        role: RBAC role.
+        is_active: Account status.
+        created_at: Creation timestamp.
+    """
+
+    id: str
+    email: str
+    name: Optional[str] = None
+    role: str = "user"
+    is_active: bool = True
+    created_at: str = ""
+
+
+class UserListResponse(BaseModel):
+    """Paginated user list response.
+
+    Attributes:
+        users: List of user profiles.
+        total: Total matching users.
+        limit: Page size.
+        offset: Current offset.
+    """
+
+    users: list[AdminUserItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+class SystemStats(BaseModel):
+    """System-wide statistics for the admin dashboard.
+
+    Attributes:
+        total_users: Total registered users.
+        active_users: Currently active users.
+        active_modules: List of active module IDs.
+        total_requests: Total API requests processed.
+    """
+
+    total_users: int = 0
+    active_users: int = 0
+    active_modules: list[str] = Field(default_factory=list)
+    total_requests: int = 0
+
+
+class ConfigResponse(BaseModel):
+    """Current system configuration (secrets masked).
+
+    Attributes:
+        project_name: Project name.
+        environment: Runtime environment (development, production).
+        modules: Active modules.
+        settings: Configuration key-value pairs (secrets masked).
+    """
+
+    project_name: str = ""
+    environment: str = "development"
+    modules: list[str] = Field(default_factory=list)
+    settings: dict[str, str] = Field(default_factory=dict)

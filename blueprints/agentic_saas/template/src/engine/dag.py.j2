@@ -1,0 +1,119 @@
+"""DAG validation -- topological sort and cycle detection for workflows."""
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class DAGNode:
+    """A single step in the workflow DAG."""
+    id: str
+    agent_id: str
+    input_map: dict[str, str] = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+class DAGValidationError(Exception):
+    """Raised when a DAG definition is invalid."""
+
+
+def parse_dag(steps: list[dict[str, Any]]) -> list[DAGNode]:
+    """Parse raw step definitions into DAGNode objects.
+
+    Args:
+        steps: List of step dicts with id, agent_id, depends_on, etc.
+
+    Returns:
+        List of validated DAGNode objects.
+
+    Raises:
+        DAGValidationError: If steps are malformed.
+    """
+    if not steps:
+        raise DAGValidationError("Workflow must have at least one step")
+
+    nodes = []
+    seen_ids: set[str] = set()
+    for step in steps:
+        step_id = step.get("id", "")
+        if not step_id:
+            raise DAGValidationError("Every step must have a non-empty 'id'")
+        if step_id in seen_ids:
+            raise DAGValidationError(f"Duplicate step id: '{step_id}'")
+        if not step.get("agent_id"):
+            raise DAGValidationError(f"Step '{step_id}' missing 'agent_id'")
+
+        seen_ids.add(step_id)
+        nodes.append(DAGNode(
+            id=step_id,
+            agent_id=step["agent_id"],
+            input_map=step.get("input_map", {}),
+            depends_on=step.get("depends_on", []),
+            config=step.get("config", {}),
+        ))
+
+    # Validate dependency references
+    for node in nodes:
+        for dep in node.depends_on:
+            if dep not in seen_ids:
+                raise DAGValidationError(
+                    f"Step '{node.id}' depends on unknown step '{dep}'"
+                )
+
+    return nodes
+
+
+def topological_sort(nodes: list[DAGNode]) -> list[list[DAGNode]]:
+    """Sort DAG nodes into parallel execution groups using Kahn's algorithm.
+
+    Returns groups where all nodes within a group can execute concurrently.
+
+    Args:
+        nodes: List of DAGNode objects (already validated).
+
+    Returns:
+        List of groups (each group is a list of DAGNodes that can run in parallel).
+
+    Raises:
+        DAGValidationError: If a cycle is detected.
+    """
+    node_map: dict[str, DAGNode] = {n.id: n for n in nodes}
+    in_degree: dict[str, int] = {n.id: 0 for n in nodes}
+    dependents: dict[str, list[str]] = defaultdict(list)
+
+    for node in nodes:
+        for dep in node.depends_on:
+            dependents[dep].append(node.id)
+            in_degree[node.id] += 1
+
+    # Start with nodes that have no dependencies
+    queue: deque[str] = deque(nid for nid, deg in in_degree.items() if deg == 0)
+    groups: list[list[DAGNode]] = []
+    processed = 0
+
+    while queue:
+        # All nodes currently in the queue can run in parallel
+        current_group: list[DAGNode] = []
+        next_queue: deque[str] = deque()
+
+        while queue:
+            nid = queue.popleft()
+            current_group.append(node_map[nid])
+            processed += 1
+
+            for dependent_id in dependents[nid]:
+                in_degree[dependent_id] -= 1
+                if in_degree[dependent_id] == 0:
+                    next_queue.append(dependent_id)
+
+        groups.append(current_group)
+        queue = next_queue
+
+    if processed != len(nodes):
+        raise DAGValidationError(
+            "Cycle detected in workflow DAG -- "
+            f"processed {processed}/{len(nodes)} steps"
+        )
+
+    return groups

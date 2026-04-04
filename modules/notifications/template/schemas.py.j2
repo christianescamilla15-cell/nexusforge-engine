@@ -1,0 +1,91 @@
+"""Pydantic schemas for the notifications module in {{ PROJECT_NAME }}."""
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class SendNotificationRequest(BaseModel):
+    """Request to send a notification.
+
+    Attributes:
+        channels: Channels to deliver through (email, slack, webhook).
+        recipient: Recipient identifier (email address, channel, or URL).
+        subject: Notification subject/title.
+        body: Notification body text.
+        metadata: Optional extra data (e.g., webhook headers).
+    """
+
+    channels: list[str] = Field(
+        ..., min_length=1, description="Delivery channels: email, slack, webhook"
+    )
+    recipient: str = Field(..., min_length=1, description="Recipient identifier")
+    subject: str = Field(..., min_length=1, max_length=255, description="Subject line")
+    body: str = Field(..., min_length=1, description="Notification body")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Extra metadata")
+
+
+class ChannelDeliveryStatus(BaseModel):
+    """Delivery status for a single channel.
+
+    Attributes:
+        channel: The channel name.
+        status: 'sent' or 'failed'.
+        error: Error message if delivery failed.
+    """
+
+    channel: str = Field(..., description="Channel name")
+    status: str = Field(..., description="sent or failed")
+    error: Optional[str] = Field(None, description="Error message")
+
+
+class SendNotificationResponse(BaseModel):
+    """Response after sending a notification.
+
+    Attributes:
+        notification_id: Unique notification ID.
+        delivery_statuses: Per-channel delivery results.
+    """
+
+    notification_id: str = Field(..., description="Notification UUID")
+    delivery_statuses: list[ChannelDeliveryStatus] = Field(default_factory=list)
+
+
+class NotificationItem(BaseModel):
+    """A notification record in history.
+
+    Attributes:
+        id: Notification UUID.
+        sender_id: Who sent it.
+        channels: Channels used.
+        recipient: Who received it.
+        subject: Subject line.
+        body: Body text.
+        delivery_statuses: Per-channel results.
+        created_at: When it was sent.
+    """
+
+    id: str
+    sender_id: str
+    channels: list[str]
+    recipient: str
+    subject: str
+    body: str
+    delivery_statuses: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str
+
+
+class NotificationHistoryResponse(BaseModel):
+    """Paginated notification history.
+
+    Attributes:
+        notifications: List of notification items.
+        total: Total count matching the filter.
+        limit: Page size.
+        offset: Current offset.
+    """
+
+    notifications: list[NotificationItem] = Field(default_factory=list)
+    total: int = Field(0)
+    limit: int = Field(50)
+    offset: int = Field(0)

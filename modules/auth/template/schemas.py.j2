@@ -1,0 +1,73 @@
+"""Pydantic schemas for the auth module in {{ PROJECT_NAME }}."""
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+class RegisterRequest(BaseModel):
+    """Payload for creating a new user account.
+
+    Attributes:
+        email: Must be a valid email address.
+        password: Minimum 8 characters.
+        name: Optional display name.
+    """
+
+    email: EmailStr = Field(..., description="User email address")
+    password: str = Field(..., min_length=8, description="Password (min 8 chars)")
+    name: Optional[str] = Field(None, max_length=100, description="Display name")
+
+
+class LoginRequest(BaseModel):
+    """Payload for user login.
+
+    Attributes:
+        email: Registered email address.
+        password: Account password.
+    """
+
+    email: EmailStr = Field(..., description="User email address")
+    password: str = Field(..., description="Account password")
+
+
+class TokenResponse(BaseModel):
+    """JWT token pair returned on successful authentication.
+
+    Attributes:
+        access_token: Short-lived JWT for API access.
+        refresh_token: Long-lived JWT for obtaining new access tokens.
+        token_type: Always 'bearer'.
+    """
+
+    access_token: str = Field(..., description="JWT access token")
+    refresh_token: str = Field(..., description="JWT refresh token")
+    token_type: str = Field("bearer", description="Token type (always bearer)")
+
+
+class UserResponse(BaseModel):
+    """Public user profile returned by the API.
+
+    Never includes password_hash.
+
+    Attributes:
+        id: Unique user ID.
+        email: User email.
+        name: Display name.
+        role: RBAC role.
+        is_active: Whether the account is active.
+        created_at: Account creation timestamp.
+    """
+
+    id: str = Field(..., description="User UUID")
+    email: EmailStr = Field(..., description="User email")
+    name: Optional[str] = Field(None, description="Display name")
+    role: str = Field("user", description="User role")
+    is_active: bool = Field(True, description="Account active flag")
+    created_at: datetime = Field(..., description="Creation timestamp")
+
+    class Config:
+        """Pydantic config."""
+
+        from_attributes = True

@@ -1,0 +1,91 @@
+"""AI ticket classifier -- determines urgency and category via LLM."""
+import json
+import os
+from typing import Any
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+import anthropic
+{% else %}
+import openai
+{% endif %}
+
+from src.tickets.models import TicketClassification, Urgency, Category
+
+_SYSTEM_PROMPT = """\
+You are a support ticket classifier. Given a ticket title and description,
+output a JSON object with these fields:
+- urgency: one of "critical", "high", "medium", "low"
+- category: one of "billing", "technical", "general", "account"
+- confidence: a float between 0.0 and 1.0
+- suggested_team: a short team name (e.g. "billing-ops", "platform-eng", "support-tier-1")
+
+Rules:
+- "critical" = system down, data loss, security breach
+- "high" = major feature broken, payment failure
+- "medium" = degraded experience, non-blocking bug
+- "low" = questions, feature requests, cosmetic issues
+
+Return ONLY valid JSON, no markdown fences.
+"""
+
+TEAM_MAP: dict[str, str] = {
+    "billing": "billing-ops",
+    "technical": "platform-eng",
+    "account": "account-mgmt",
+    "general": "support-tier-1",
+}
+
+
+async def classify_ticket(title: str, description: str) -> TicketClassification:
+    """Classify a ticket using the configured LLM provider.
+
+    Args:
+        title: The ticket title.
+        description: The ticket description body.
+
+    Returns:
+        TicketClassification with urgency, category, confidence, suggested_team.
+    """
+    user_message = f"Title: {title}\nDescription: {description}"
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    raw: str = response.content[0].text
+{% else %}
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        max_tokens=256,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+    )
+    raw = response.choices[0].message.content or "{}"
+{% endif %}
+
+    data: dict[str, Any] = _parse_response(raw)
+    return TicketClassification(
+        urgency=Urgency(data.get("urgency", "medium")),
+        category=Category(data.get("category", "general")),
+        confidence=float(data.get("confidence", 0.5)),
+        suggested_team=data.get("suggested_team", TEAM_MAP.get(data.get("category", "general"), "support-tier-1")),
+    )
+
+
+def _parse_response(raw: str) -> dict[str, Any]:
+    """Parse LLM JSON response, stripping markdown fences if present."""
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1])
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"urgency": "medium", "category": "general", "confidence": 0.0, "suggested_team": "support-tier-1"}

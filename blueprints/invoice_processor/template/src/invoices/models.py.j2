@@ -1,0 +1,65 @@
+"""Pydantic models for the invoice processing system."""
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
+from typing import Optional
+from pydantic import BaseModel, Field
+
+
+class InvoiceStatus(str, Enum):
+    """Invoice processing lifecycle states."""
+    pending = "pending"
+    extracted = "extracted"
+    validated = "validated"
+    rejected = "rejected"
+    approved = "approved"
+
+
+class LineItem(BaseModel):
+    """A single line item on an invoice."""
+    description: str
+    quantity: Decimal = Field(ge=0)
+    unit_price: Decimal = Field(ge=0)
+    total: Decimal = Field(ge=0)
+
+
+class InvoiceExtraction(BaseModel):
+    """AI-extracted fields from a raw invoice document."""
+    vendor_name: str
+    invoice_number: Optional[str] = None
+    invoice_date: date
+    due_date: Optional[date] = None
+    subtotal: Decimal
+    tax: Optional[Decimal] = None
+    total_amount: Decimal
+    currency: str = "USD"
+    line_items: list[LineItem] = []
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class InvoiceResponse(BaseModel):
+    """Full invoice representation returned by the API."""
+    id: int
+    vendor_name: str
+    invoice_number: Optional[str] = None
+    invoice_date: date
+    due_date: Optional[date] = None
+    subtotal: Decimal
+    tax: Optional[Decimal] = None
+    total_amount: Decimal
+    currency: str
+    status: InvoiceStatus
+    source_filename: str
+    line_items: list[LineItem] = []
+    validation_errors: list[str] = []
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class InvoiceListResponse(BaseModel):
+    """Paginated invoice list."""
+    invoices: list[InvoiceResponse]
+    total: int

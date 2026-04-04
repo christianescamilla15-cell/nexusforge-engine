@@ -1,0 +1,176 @@
+"""Tests for DAG validation and workflow execution."""
+import asyncio
+from typing import Any
+
+import pytest
+
+from src.agents.base import BaseAgent
+from src.agents.registry import register_agent, get_agent, list_agents, _REGISTRY
+from src.engine.dag import parse_dag, topological_sort, DAGValidationError
+from src.engine.executor import execute_workflow
+
+
+# -- Test agent fixtures --
+
+class EchoAgent(BaseAgent):
+    """Test agent that echoes its input."""
+
+    async def run(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        return {"echo": input_data}
+
+
+class UpperAgent(BaseAgent):
+    """Test agent that uppercases a text field."""
+
+    async def run(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        text = input_data.get("text", "")
+        return {"result": text.upper()}
+
+
+class FailAgent(BaseAgent):
+    """Test agent that always fails."""
+
+    async def run(self, input_data: dict[str, Any]) -> Any:
+        raise RuntimeError("Intentional failure for testing")
+
+
+@pytest.fixture(autouse=True)
+def clean_registry():
+    """Reset the agent registry before each test."""
+    _REGISTRY.clear()
+    register_agent("echo", EchoAgent)
+    register_agent("upper", UpperAgent)
+    register_agent("fail", FailAgent)
+    yield
+    _REGISTRY.clear()
+
+
+# -- DAG parsing tests --
+
+def test_parse_valid_dag():
+    steps = [
+        {"id": "step1", "agent_id": "echo"},
+        {"id": "step2", "agent_id": "upper", "depends_on": ["step1"]},
+    ]
+    nodes = parse_dag(steps)
+    assert len(nodes) == 2
+    assert nodes[0].id == "step1"
+    assert nodes[1].depends_on == ["step1"]
+
+
+def test_parse_empty_dag_raises():
+    with pytest.raises(DAGValidationError, match="at least one step"):
+        parse_dag([])
+
+
+def test_parse_duplicate_id_raises():
+    steps = [
+        {"id": "dup", "agent_id": "echo"},
+        {"id": "dup", "agent_id": "upper"},
+    ]
+    with pytest.raises(DAGValidationError, match="Duplicate"):
+        parse_dag(steps)
+
+
+def test_parse_missing_agent_id_raises():
+    with pytest.raises(DAGValidationError, match="missing 'agent_id'"):
+        parse_dag([{"id": "step1"}])
+
+
+def test_parse_unknown_dependency_raises():
+    steps = [{"id": "step1", "agent_id": "echo", "depends_on": ["ghost"]}]
+    with pytest.raises(DAGValidationError, match="unknown step"):
+        parse_dag(steps)
+
+
+# -- Topological sort tests --
+
+def test_topo_sort_linear():
+    steps = [
+        {"id": "a", "agent_id": "echo"},
+        {"id": "b", "agent_id": "echo", "depends_on": ["a"]},
+        {"id": "c", "agent_id": "echo", "depends_on": ["b"]},
+    ]
+    nodes = parse_dag(steps)
+    groups = topological_sort(nodes)
+    assert len(groups) == 3
+    assert groups[0][0].id == "a"
+    assert groups[1][0].id == "b"
+    assert groups[2][0].id == "c"
+
+
+def test_topo_sort_parallel():
+    steps = [
+        {"id": "root", "agent_id": "echo"},
+        {"id": "left", "agent_id": "echo", "depends_on": ["root"]},
+        {"id": "right", "agent_id": "echo", "depends_on": ["root"]},
+        {"id": "join", "agent_id": "echo", "depends_on": ["left", "right"]},
+    ]
+    nodes = parse_dag(steps)
+    groups = topological_sort(nodes)
+    assert len(groups) == 3
+    # Group 0: root, Group 1: left + right (parallel), Group 2: join
+    assert len(groups[1]) == 2
+    parallel_ids = {n.id for n in groups[1]}
+    assert parallel_ids == {"left", "right"}
+
+
+def test_topo_sort_cycle_detection():
+    steps = [
+        {"id": "a", "agent_id": "echo", "depends_on": ["b"]},
+        {"id": "b", "agent_id": "echo", "depends_on": ["a"]},
+    ]
+    nodes = parse_dag(steps)
+    with pytest.raises(DAGValidationError, match="Cycle detected"):
+        topological_sort(nodes)
+
+
+# -- Workflow execution tests --
+
+@pytest.mark.anyio
+async def test_execute_simple_workflow():
+    steps = [
+        {"id": "greet", "agent_id": "echo"},
+    ]
+    result = await execute_workflow(steps, {"message": "hello"})
+    assert result.success is True
+    assert len(result.steps) == 1
+    assert result.steps[0].success is True
+    assert result.steps[0].output["echo"]["message"] == "hello"
+
+
+@pytest.mark.anyio
+async def test_execute_chained_workflow():
+    steps = [
+        {"id": "step1", "agent_id": "echo"},
+        {
+            "id": "step2",
+            "agent_id": "upper",
+            "depends_on": ["step1"],
+            "input_map": {"text": "step1.echo.message"},
+        },
+    ]
+    result = await execute_workflow(steps, {"message": "hello world"})
+    assert result.success is True
+    assert len(result.steps) == 2
+
+
+@pytest.mark.anyio
+async def test_execute_workflow_with_failing_step():
+    steps = [
+        {"id": "ok_step", "agent_id": "echo"},
+        {"id": "bad_step", "agent_id": "fail", "depends_on": ["ok_step"]},
+    ]
+    result = await execute_workflow(steps, {})
+    assert result.success is False
+    assert result.steps[0].success is True
+    assert result.steps[1].success is False
+    assert "Intentional failure" in result.steps[1].error
+
+
+@pytest.mark.anyio
+async def test_execute_workflow_unknown_agent():
+    steps = [{"id": "mystery", "agent_id": "nonexistent"}]
+    result = await execute_workflow(steps, {})
+    assert result.success is False
+    assert "not found" in result.steps[0].error

@@ -1,0 +1,48 @@
+"""Observability configuration for {{ PROJECT_NAME }}.
+
+Centralizes logging, metrics, and health check settings.
+All configuration comes from environment variables.
+"""
+
+import os
+from typing import Any
+
+
+class ObservabilityConfig:
+    """Configuration for the observability module.
+
+    Attributes:
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
+        log_format: Log output format ('json' or 'text').
+        sentry_dsn: Optional Sentry DSN for error tracking.
+        metrics_enabled: Whether Prometheus metrics are active.
+        health_check_timeout: Timeout for health check probes (seconds).
+    """
+
+    def __init__(self) -> None:
+        """Load all config from environment variables."""
+        self.log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+        self.log_format: str = os.getenv("LOG_FORMAT", "json").lower()
+        self.sentry_dsn: str | None = os.getenv("SENTRY_DSN")
+        self.metrics_enabled: bool = os.getenv("METRICS_ENABLED", "true").lower() == "true"
+        self.health_check_timeout: int = int(os.getenv("HEALTH_CHECK_TIMEOUT", "5"))
+        self.service_name: str = os.getenv("SERVICE_NAME", "{{ PROJECT_NAME }}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize config to a dictionary.
+
+        Returns:
+            Dict with all configuration values.
+        """
+        return {
+            "log_level": self.log_level,
+            "log_format": self.log_format,
+            "sentry_dsn": "***" if self.sentry_dsn else None,
+            "metrics_enabled": self.metrics_enabled,
+            "health_check_timeout": self.health_check_timeout,
+            "service_name": self.service_name,
+        }
+
+
+# Singleton instance
+config = ObservabilityConfig()

@@ -1,0 +1,109 @@
+"""Generic webhook connector for {{ PROJECT_NAME }}.
+
+Sends and receives data via arbitrary HTTP endpoints.
+"""
+
+import time
+from typing import Any, Optional
+
+import httpx
+
+from .base import ConnectorBase
+
+
+class WebhookConnector(ConnectorBase):
+    """Generic HTTP webhook connector.
+
+    Reads from GET endpoints and writes (POST) to webhook URLs.
+
+    Attributes:
+        name: Human-readable name.
+        connector_type: 'webhook'.
+    """
+
+    name = "Webhook"
+    connector_type = "webhook"
+
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Initialize with config.
+
+        Args:
+            config: Should contain 'base_url' and optionally 'headers'.
+        """
+        super().__init__(config)
+        self._base_url: str = (config or {}).get("base_url", "")
+        self._headers: dict[str, str] = (config or {}).get("headers", {})
+
+    async def connect(self) -> bool:
+        """Verify the webhook endpoint is reachable.
+
+        Returns:
+            True if the endpoint responds.
+
+        Raises:
+            ConnectionError: If the endpoint is unreachable.
+        """
+        if not self._base_url:
+            raise ConnectionError("Webhook base_url not configured")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.head(
+                self._base_url, headers=self._headers, timeout=10
+            )
+            if resp.status_code >= 500:
+                raise ConnectionError(f"Webhook returned {resp.status_code}")
+
+        self.is_connected = True
+        return True
+
+    async def disconnect(self) -> None:
+        """Mark as disconnected."""
+        self.is_connected = False
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Test the webhook endpoint.
+
+        Returns:
+            Dict with ok, latency_ms, details.
+        """
+        start = time.monotonic()
+        try:
+            await self.connect()
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": True, "latency_ms": round(latency, 2), "details": "Webhook reachable"}
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": False, "latency_ms": round(latency, 2), "details": str(exc)}
+
+    async def read(self, resource_id: str, **kwargs: Any) -> Any:
+        """Read data from a webhook endpoint via GET.
+
+        Args:
+            resource_id: Path appended to base_url.
+
+        Returns:
+            JSON response data.
+        """
+        url = f"{self._base_url.rstrip('/')}/{resource_id.lstrip('/')}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, headers=self._headers, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def write(self, resource_id: str, data: Any, **kwargs: Any) -> Any:
+        """Write data to a webhook endpoint via POST.
+
+        Args:
+            resource_id: Path appended to base_url.
+            data: JSON-serializable payload.
+
+        Returns:
+            JSON response from the webhook.
+        """
+        url = f"{self._base_url.rstrip('/')}/{resource_id.lstrip('/')}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url, json=data, headers=self._headers, timeout=15
+            )
+            resp.raise_for_status()
+            return resp.json()

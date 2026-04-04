@@ -1,0 +1,111 @@
+"""Slack notification channel for {{ PROJECT_NAME }}.
+
+Sends messages to Slack channels or users via incoming webhooks
+or the Slack Bot API.
+"""
+
+import os
+from typing import Any, Optional
+
+import httpx
+
+# ---------------------------------------------------------------------------
+# Configuration from environment
+# ---------------------------------------------------------------------------
+SLACK_WEBHOOK_URL: str | None = os.getenv("SLACK_WEBHOOK_URL")
+SLACK_BOT_TOKEN: str | None = os.getenv("SLACK_BOT_TOKEN")
+
+
+async def send_slack(
+    recipient: str,
+    subject: str,
+    body: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    """Send a Slack notification.
+
+    If a webhook URL is configured, sends via webhook.
+    Otherwise, uses the Slack Bot API to post to a channel.
+
+    Args:
+        recipient: Slack channel name (e.g., '#general') or webhook URL override.
+        subject: Message title (shown as bold header).
+        body: Message body text.
+        metadata: Optional extra data. Can include 'webhook_url' to override.
+
+    Raises:
+        RuntimeError: If neither webhook nor bot token is configured.
+        httpx.HTTPStatusError: If the Slack API returns an error.
+    """
+    webhook_url = (metadata or {}).get("webhook_url") or SLACK_WEBHOOK_URL
+
+    if webhook_url:
+        await _send_via_webhook(webhook_url, subject, body)
+    elif SLACK_BOT_TOKEN:
+        await _send_via_bot(recipient, subject, body)
+    else:
+        raise RuntimeError(
+            "Slack not configured: set SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN"
+        )
+
+
+async def _send_via_webhook(webhook_url: str, subject: str, body: str) -> None:
+    """Send a Slack message via incoming webhook.
+
+    Args:
+        webhook_url: The Slack incoming webhook URL.
+        subject: Message title.
+        body: Message body.
+    """
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": subject},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": body},
+            },
+        ],
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(webhook_url, json=payload, timeout=10)
+        response.raise_for_status()
+
+
+async def _send_via_bot(channel: str, subject: str, body: str) -> None:
+    """Send a Slack message via the Bot API.
+
+    Args:
+        channel: Slack channel name or ID.
+        subject: Message title.
+        body: Message body.
+    """
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "channel": channel,
+        "text": f"*{subject}*\n{body}",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": subject},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": body},
+            },
+        ],
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Slack API error: {data.get('error', 'unknown')}")

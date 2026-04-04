@@ -1,0 +1,66 @@
+"""AI auto-response generator for incoming tickets."""
+import os
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+import anthropic
+{% else %}
+import openai
+{% endif %}
+
+_SYSTEM_PROMPT = """\
+You are a friendly customer support assistant for {{ PROJECT_NAME }}.
+Given a support ticket, write a brief, empathetic initial response that:
+1. Acknowledges the issue
+2. Sets expectations for resolution time based on the category
+3. Asks any clarifying questions if needed
+4. Keeps the tone professional but warm
+
+Category-specific response times:
+- billing: "within 1 business day"
+- technical: "within 4 hours for critical, 24 hours otherwise"
+- account: "within 1 business day"
+- general: "within 2 business days"
+
+Keep the response under 150 words.
+"""
+
+
+async def generate_response(title: str, description: str, category: str) -> str:
+    """Generate an AI auto-response for a newly created ticket.
+
+    Args:
+        title: The ticket title.
+        description: The ticket description.
+        category: The classified category.
+
+    Returns:
+        A formatted response string ready to send to the user.
+    """
+    user_message = (
+        f"Category: {category}\n"
+        f"Title: {title}\n"
+        f"Description: {description}\n\n"
+        "Write the initial response:"
+    )
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return response.content[0].text.strip()
+{% else %}
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        max_tokens=300,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+    )
+    return (response.choices[0].message.content or "").strip()
+{% endif %}

@@ -1,0 +1,23 @@
+-- Migration 001: Create tickets table for {{ PROJECT_NAME }}
+
+CREATE TYPE ticket_urgency AS ENUM ('critical', 'high', 'medium', 'low');
+CREATE TYPE ticket_category AS ENUM ('billing', 'technical', 'general', 'account');
+CREATE TYPE ticket_status AS ENUM ('open', 'in_progress', 'resolved', 'closed');
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id            SERIAL PRIMARY KEY,
+    title         VARCHAR(200)      NOT NULL,
+    description   TEXT              NOT NULL,
+    urgency       ticket_urgency    NOT NULL DEFAULT 'medium',
+    category      ticket_category   NOT NULL DEFAULT 'general',
+    status        ticket_status     NOT NULL DEFAULT 'open',
+    assigned_team VARCHAR(100),
+    ai_response   TEXT,
+    created_at    TIMESTAMPTZ       NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ
+);
+
+CREATE INDEX idx_tickets_status ON tickets (status);
+CREATE INDEX idx_tickets_urgency ON tickets (urgency);
+CREATE INDEX idx_tickets_category ON tickets (category);
+CREATE INDEX idx_tickets_created_at ON tickets (created_at DESC);

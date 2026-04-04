@@ -1,0 +1,63 @@
+"""Pydantic schemas for the AI chat module in {{ PROJECT_NAME }}."""
+
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class ChatMessage(BaseModel):
+    """Incoming chat message from the user.
+
+    Attributes:
+        content: The message text.
+        conversation_id: ID of an existing conversation (None to start new).
+        system_prompt: Optional override for the system prompt.
+        user_id: Explicit user ID (used when auth module is absent).
+    """
+
+    content: str = Field(..., min_length=1, max_length=10000, description="Message text")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID")
+    system_prompt: Optional[str] = Field(None, description="System prompt override")
+    user_id: Optional[str] = Field(None, description="User ID (no-auth fallback)")
+
+
+class ChatResponse(BaseModel):
+    """AI response to a chat message.
+
+    Attributes:
+        conversation_id: The conversation this response belongs to.
+        content: The assistant's reply text.
+        role: Always 'assistant'.
+    """
+
+    conversation_id: str = Field(..., description="Conversation ID")
+    content: str = Field(..., description="Assistant reply")
+    role: str = Field("assistant", description="Message role")
+
+
+class MessageItem(BaseModel):
+    """A single message in conversation history.
+
+    Attributes:
+        role: 'user' or 'assistant'.
+        content: Message text.
+        timestamp: ISO 8601 timestamp.
+    """
+
+    role: str = Field(..., description="user or assistant")
+    content: str = Field(..., description="Message content")
+    timestamp: str = Field(..., description="ISO 8601 timestamp")
+
+
+class ConversationHistory(BaseModel):
+    """Full conversation history.
+
+    Attributes:
+        conversation_id: Unique conversation identifier.
+        messages: Ordered list of messages.
+        message_count: Total number of messages.
+    """
+
+    conversation_id: str = Field(..., description="Conversation ID")
+    messages: list[MessageItem] = Field(default_factory=list)
+    message_count: int = Field(0, description="Total messages")

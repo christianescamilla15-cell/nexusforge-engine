@@ -1,0 +1,102 @@
+"""Validates extracted invoice fields against business rules."""
+import re
+from datetime import date
+from decimal import Decimal
+
+from src.invoices.models import InvoiceExtraction
+
+# Supported ISO 4217 currency codes
+VALID_CURRENCIES = {"USD", "EUR", "GBP", "MXN", "CAD", "JPY", "BRL", "AUD"}
+
+
+def validate_invoice(extraction: InvoiceExtraction) -> list[str]:
+    """Run all validation checks on an extracted invoice.
+
+    Args:
+        extraction: The AI-extracted invoice data.
+
+    Returns:
+        List of validation error messages. Empty list means valid.
+    """
+    errors: list[str] = []
+
+    errors.extend(_validate_vendor(extraction.vendor_name))
+    errors.extend(_validate_amounts(extraction))
+    errors.extend(_validate_dates(extraction))
+    errors.extend(_validate_currency(extraction.currency))
+    errors.extend(_validate_line_items(extraction))
+
+    return errors
+
+
+def _validate_vendor(vendor_name: str) -> list[str]:
+    """Vendor name must be non-empty and reasonable length."""
+    errors: list[str] = []
+    if not vendor_name or vendor_name == "Unknown Vendor":
+        errors.append("Vendor name could not be extracted")
+    if len(vendor_name) > 200:
+        errors.append("Vendor name exceeds 200 characters")
+    return errors
+
+
+def _validate_amounts(extraction: InvoiceExtraction) -> list[str]:
+    """Total amount must be positive; subtotal + tax should match total."""
+    errors: list[str] = []
+
+    if extraction.total_amount <= 0:
+        errors.append("Total amount must be greater than zero")
+
+    if extraction.subtotal < 0:
+        errors.append("Subtotal cannot be negative")
+
+    if extraction.tax is not None and extraction.tax < 0:
+        errors.append("Tax amount cannot be negative")
+
+    # Check subtotal + tax ~= total (within 1 cent tolerance)
+    if extraction.tax is not None:
+        expected = extraction.subtotal + extraction.tax
+        diff = abs(expected - extraction.total_amount)
+        if diff > Decimal("0.01"):
+            errors.append(
+                f"Amount mismatch: subtotal ({extraction.subtotal}) + "
+                f"tax ({extraction.tax}) != total ({extraction.total_amount})"
+            )
+
+    return errors
+
+
+def _validate_dates(extraction: InvoiceExtraction) -> list[str]:
+    """Invoice date must not be in the future; due date must be >= invoice date."""
+    errors: list[str] = []
+    today = date.today()
+
+    if extraction.invoice_date > today:
+        errors.append("Invoice date is in the future")
+
+    if extraction.due_date and extraction.due_date < extraction.invoice_date:
+        errors.append("Due date is before invoice date")
+
+    return errors
+
+
+def _validate_currency(currency: str) -> list[str]:
+    """Currency must be a recognized ISO 4217 code."""
+    if currency.upper() not in VALID_CURRENCIES:
+        return [f"Unrecognized currency code: {currency}"]
+    return []
+
+
+def _validate_line_items(extraction: InvoiceExtraction) -> list[str]:
+    """Line items should have consistent math: quantity * unit_price = total."""
+    errors: list[str] = []
+
+    for i, item in enumerate(extraction.line_items):
+        expected = item.quantity * item.unit_price
+        diff = abs(expected - item.total)
+        if diff > Decimal("0.01"):
+            errors.append(
+                f"Line item {i + 1}: quantity ({item.quantity}) * "
+                f"unit_price ({item.unit_price}) != total ({item.total})"
+            )
+
+    return errors

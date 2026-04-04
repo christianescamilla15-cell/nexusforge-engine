@@ -1,0 +1,79 @@
+"""Admin panel routes for {{ PROJECT_NAME }}.
+
+Restricted to admin/superadmin roles. Provides user management,
+system statistics, and configuration viewing.
+"""
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query
+
+from .schemas import SystemStats, UserListResponse, ConfigResponse
+from .service import list_users, get_system_stats, get_config
+{% if HAS_AUTH %}
+from src.auth.dependencies import require_role
+{% endif %}
+
+router = APIRouter()
+
+
+@router.get("/users", response_model=UserListResponse)
+async def get_users(
+    limit: int = Query(50, ge=1, le=500, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    role: str | None = Query(None, description="Filter by role"),
+{% if HAS_AUTH %}
+    admin_user: dict[str, Any] = Depends(require_role("admin", "superadmin")),
+{% endif %}
+) -> UserListResponse:
+    """List all registered users (admin only).
+
+    Args:
+        limit: Maximum number of users to return.
+        offset: Pagination offset.
+        role: Optional role filter.
+        admin_user: Must be admin or superadmin.
+
+    Returns:
+        Paginated list of user profiles.
+    """
+    users, total = await list_users(limit=limit, offset=offset, role=role)
+    return UserListResponse(users=users, total=total, limit=limit, offset=offset)
+
+
+@router.get("/stats", response_model=SystemStats)
+async def get_stats(
+{% if HAS_AUTH %}
+    admin_user: dict[str, Any] = Depends(require_role("admin", "superadmin")),
+{% endif %}
+) -> SystemStats:
+    """Get system-wide statistics (admin only).
+
+    Includes user counts, request metrics, and module status.
+
+    Args:
+        admin_user: Must be admin or superadmin.
+
+    Returns:
+        SystemStats with aggregated system data.
+    """
+    return await get_system_stats()
+
+
+@router.get("/config", response_model=ConfigResponse)
+async def get_configuration(
+{% if HAS_AUTH %}
+    admin_user: dict[str, Any] = Depends(require_role("admin", "superadmin")),
+{% endif %}
+) -> ConfigResponse:
+    """View the current system configuration (admin only).
+
+    Sensitive values (API keys, secrets) are masked.
+
+    Args:
+        admin_user: Must be admin or superadmin.
+
+    Returns:
+        ConfigResponse with current settings.
+    """
+    return await get_config()

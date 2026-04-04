@@ -1,0 +1,72 @@
+"""Base agent class -- all agents inherit from this."""
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class AgentResult:
+    """Standardized result from any agent execution."""
+    agent_id: str
+    success: bool
+    output: Any = None
+    error: str | None = None
+    duration_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class BaseAgent(ABC):
+    """Abstract base class for all agents in the platform.
+
+    Subclasses must implement the `run` method with their domain logic.
+    The `execute` method wraps `run` with timing, error handling, and
+    standardized result formatting.
+    """
+
+    def __init__(self, agent_id: str, config: dict[str, Any] | None = None):
+        self.agent_id = agent_id
+        self.config = config or {}
+
+    @abstractmethod
+    async def run(self, input_data: dict[str, Any]) -> Any:
+        """Execute the agent's core logic.
+
+        Args:
+            input_data: The input payload for this agent step.
+
+        Returns:
+            The agent's output (any serializable type).
+        """
+        ...
+
+    async def execute(self, input_data: dict[str, Any]) -> AgentResult:
+        """Run the agent with timing and error handling.
+
+        Args:
+            input_data: The input payload for this agent step.
+
+        Returns:
+            AgentResult with success/failure info and timing.
+        """
+        start = time.perf_counter()
+        try:
+            output = await self.run(input_data)
+            duration = (time.perf_counter() - start) * 1000
+            return AgentResult(
+                agent_id=self.agent_id,
+                success=True,
+                output=output,
+                duration_ms=round(duration, 2),
+            )
+        except Exception as exc:
+            duration = (time.perf_counter() - start) * 1000
+            return AgentResult(
+                agent_id=self.agent_id,
+                success=False,
+                error=str(exc),
+                duration_ms=round(duration, 2),
+            )
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} id={self.agent_id!r}>"

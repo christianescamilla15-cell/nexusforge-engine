@@ -1,0 +1,78 @@
+"""Extractor agent -- pulls structured fields from unstructured text."""
+import json
+import os
+from typing import Any
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+import anthropic
+{% else %}
+import openai
+{% endif %}
+
+from src.agents.base import BaseAgent
+from src.agents.registry import register_agent
+
+_SYSTEM_PROMPT = """\
+You are a structured data extractor. Given input text and a schema of
+fields to extract, return a JSON object with the extracted values.
+
+For each field in the schema:
+- Extract the value from the text if present
+- Use null if the field cannot be found
+- Add a _confidence key (e.g. "name_confidence": 0.9)
+
+Return ONLY valid JSON.
+"""
+
+
+class ExtractorAgent(BaseAgent):
+    """Extracts structured fields from unstructured text using LLM."""
+
+    async def run(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract fields from text.
+
+        Args:
+            input_data: Must contain 'text' and 'schema' (dict of field_name: description).
+
+        Returns:
+            Dict with extracted field values and per-field confidence scores.
+        """
+        text = input_data.get("text", "")
+        schema = input_data.get("schema", {})
+
+        schema_desc = "\n".join(f"- {k}: {v}" for k, v in schema.items())
+        user_message = (
+            f"Fields to extract:\n{schema_desc}\n\n"
+            f"Text:\n{text[:3000]}"
+        )
+
+{% if LLM_PROVIDER == "anthropic" or not LLM_PROVIDER %}
+        client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        response = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=512,
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = response.content[0].text
+{% else %}
+        client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=512,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+        )
+        raw = response.choices[0].message.content or "{}"
+{% endif %}
+
+        try:
+            return json.loads(raw.strip())
+        except json.JSONDecodeError:
+            return {k: None for k in schema}
+
+
+# Auto-register on import
+register_agent("extractor", ExtractorAgent)

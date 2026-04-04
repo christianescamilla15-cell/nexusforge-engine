@@ -1,0 +1,161 @@
+"""Connector management routes for {{ PROJECT_NAME }}.
+
+CRUD operations for external connectors with connection testing.
+"""
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+
+from .registry import (
+    create_connector,
+    get_available_types,
+    get_connector,
+    list_connectors,
+    remove_connector,
+)
+{% if HAS_AUTH %}
+from src.auth.dependencies import get_current_user
+{% endif %}
+
+router = APIRouter()
+
+
+class CreateConnectorRequest(BaseModel):
+    """Request to create a new connector."""
+
+    connector_type: str = Field(..., description="Connector type (slack, webhook, etc.)")
+    connector_id: str = Field(..., description="Unique ID for this instance")
+    config: dict[str, Any] = Field(default_factory=dict, description="Config options")
+
+
+class ConnectorResponse(BaseModel):
+    """Connector info response."""
+
+    id: str
+    connector_type: str
+    name: str
+    is_connected: bool
+
+
+class TestConnectionResponse(BaseModel):
+    """Connection test result."""
+
+    ok: bool
+    latency_ms: float = 0.0
+    details: str = ""
+
+
+@router.get("/types")
+async def available_types() -> list[dict[str, str]]:
+    """List all available connector types.
+
+    Returns:
+        List of connector types with names.
+    """
+    return get_available_types()
+
+
+@router.get("/", response_model=list[dict[str, Any]])
+async def list_all(
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> list[dict[str, Any]]:
+    """List all active connector instances.
+
+    Returns:
+        List of active connectors with their metadata.
+    """
+    return list_connectors()
+
+
+@router.post("/", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
+async def create(
+    payload: CreateConnectorRequest,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> ConnectorResponse:
+    """Create a new connector instance.
+
+    Args:
+        payload: Connector type, ID, and configuration.
+        current_user: Authenticated user.
+
+    Returns:
+        Created connector info.
+
+    Raises:
+        HTTPException 400: If the type is unknown or ID already exists.
+    """
+    try:
+        connector = create_connector(
+            connector_type=payload.connector_type,
+            connector_id=payload.connector_id,
+            config=payload.config,
+        )
+        return ConnectorResponse(
+            id=payload.connector_id,
+            connector_type=connector.connector_type,
+            name=connector.name,
+            is_connected=connector.is_connected,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+
+@router.post("/{connector_id}/test", response_model=TestConnectionResponse)
+async def test_connection(
+    connector_id: str,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> TestConnectionResponse:
+    """Test a connector's connection to its external service.
+
+    Args:
+        connector_id: ID of the connector to test.
+
+    Returns:
+        Test results with status and latency.
+
+    Raises:
+        HTTPException 404: If the connector is not found.
+    """
+    connector = get_connector(connector_id)
+    if not connector:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Connector not found: {connector_id}",
+        )
+
+    result = await connector.test_connection()
+    return TestConnectionResponse(**result)
+
+
+@router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete(
+    connector_id: str,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> None:
+    """Delete a connector instance.
+
+    Args:
+        connector_id: ID of the connector to remove.
+
+    Raises:
+        HTTPException 404: If the connector is not found.
+    """
+    removed = await remove_connector(connector_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Connector not found: {connector_id}",
+        )

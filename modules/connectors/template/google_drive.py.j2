@@ -1,0 +1,149 @@
+"""Google Drive connector for {{ PROJECT_NAME }}.
+
+Provides file upload, download, and listing via the Google Drive API.
+Requires a service account JSON credentials file.
+"""
+
+import os
+import time
+from typing import Any, Optional
+
+from .base import ConnectorBase
+
+
+class GoogleDriveConnector(ConnectorBase):
+    """Google Drive connector using service account credentials.
+
+    Supports file listing, reading, and uploading to Google Drive.
+
+    Attributes:
+        name: Human-readable name.
+        connector_type: 'google_drive'.
+    """
+
+    name = "Google Drive"
+    connector_type = "google_drive"
+
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Initialize the Drive connector.
+
+        Args:
+            config: May contain 'credentials_path' to override env var.
+        """
+        super().__init__(config)
+        self._credentials_path: str = (config or {}).get(
+            "credentials_path",
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
+        )
+        self._service: Any = None
+
+    async def connect(self) -> bool:
+        """Authenticate with Google Drive using service account.
+
+        Returns:
+            True if authentication succeeds.
+
+        Raises:
+            ConnectionError: If credentials are missing or invalid.
+        """
+        if not self._credentials_path:
+            raise ConnectionError("GOOGLE_SERVICE_ACCOUNT_JSON not configured")
+
+        if not os.path.isfile(self._credentials_path):
+            raise ConnectionError(
+                f"Service account file not found: {self._credentials_path}"
+            )
+
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+
+            credentials = service_account.Credentials.from_service_account_file(
+                self._credentials_path,
+                scopes=["https://www.googleapis.com/auth/drive"],
+            )
+            self._service = build("drive", "v3", credentials=credentials)
+            self.is_connected = True
+            return True
+        except Exception as exc:
+            raise ConnectionError(f"Google Drive auth failed: {exc}") from exc
+
+    async def disconnect(self) -> None:
+        """Clear the service instance."""
+        self._service = None
+        self.is_connected = False
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Test Drive connection by listing root files.
+
+        Returns:
+            Dict with ok, latency_ms, details.
+        """
+        start = time.monotonic()
+        try:
+            await self.connect()
+            # Quick sanity check — list 1 file
+            self._service.files().list(pageSize=1).execute()
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": True, "latency_ms": round(latency, 2), "details": "Drive connected"}
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": False, "latency_ms": round(latency, 2), "details": str(exc)}
+
+    async def read(self, resource_id: str, **kwargs: Any) -> Any:
+        """List files in a Drive folder or get file metadata.
+
+        Args:
+            resource_id: Folder ID (use 'root' for top level).
+            **kwargs: Optional 'page_size' (default 50).
+
+        Returns:
+            List of file metadata dicts.
+        """
+        if not self._service:
+            await self.connect()
+
+        page_size = kwargs.get("page_size", 50)
+        query = f"'{resource_id}' in parents and trashed = false"
+
+        result = self._service.files().list(
+            q=query,
+            pageSize=page_size,
+            fields="files(id, name, mimeType, size, modifiedTime)",
+        ).execute()
+
+        return result.get("files", [])
+
+    async def write(self, resource_id: str, data: Any, **kwargs: Any) -> Any:
+        """Upload a file to Google Drive.
+
+        Args:
+            resource_id: Parent folder ID.
+            data: Dict with 'name' (str) and 'content' (bytes or str).
+
+        Returns:
+            Uploaded file metadata dict.
+        """
+        if not self._service:
+            await self.connect()
+
+        from googleapiclient.http import MediaInMemoryUpload
+
+        file_name = data.get("name", "untitled")
+        content = data.get("content", "")
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        file_metadata = {
+            "name": file_name,
+            "parents": [resource_id],
+        }
+
+        media = MediaInMemoryUpload(content, mimetype="application/octet-stream")
+        result = self._service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id, name, webViewLink",
+        ).execute()
+
+        return result

@@ -1,0 +1,150 @@
+"""Prometheus metrics for {{ PROJECT_NAME }}.
+
+Exposes basic request count and latency histogram metrics
+at the /metrics endpoint in Prometheus exposition format.
+"""
+
+import time
+from collections import defaultdict
+from typing import Any
+
+from fastapi import APIRouter, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+
+router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# In-memory metrics storage
+# Simple implementation — for production use prometheus_client library
+# ---------------------------------------------------------------------------
+
+_request_count: dict[str, int] = defaultdict(int)
+_request_latency_sum: dict[str, float] = defaultdict(float)
+_request_latency_count: dict[str, int] = defaultdict(int)
+
+# Latency histogram buckets (in seconds)
+_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+_latency_buckets: dict[str, dict[float, int]] = {}
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """Middleware that collects request count and latency metrics.
+
+    Tracks per-method-path-status combinations.
+    """
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """Record metrics for each request.
+
+        Args:
+            request: Incoming HTTP request.
+            call_next: Next handler.
+
+        Returns:
+            The HTTP response.
+        """
+        start = time.monotonic()
+        response = await call_next(request)
+        duration = time.monotonic() - start
+
+        # Build label key
+        method = request.method
+        path = request.url.path
+        status = str(response.status_code)
+        label = f'{method}|{path}|{status}'
+
+        # Update counters
+        _request_count[label] += 1
+        _request_latency_sum[label] += duration
+        _request_latency_count[label] += 1
+
+        # Update histogram buckets
+        if label not in _latency_buckets:
+            _latency_buckets[label] = {b: 0 for b in _BUCKETS}
+            _latency_buckets[label][float("inf")] = 0
+
+        for bucket in _BUCKETS:
+            if duration <= bucket:
+                _latency_buckets[label][bucket] += 1
+        _latency_buckets[label][float("inf")] += 1
+
+        return response
+
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Expose metrics in Prometheus exposition format.
+
+    Returns:
+        Plain text response with Prometheus-compatible metrics.
+    """
+{% raw %}
+    lines: list[str] = []
+
+    # Request count
+    lines.append("# HELP http_requests_total Total HTTP requests")
+    lines.append("# TYPE http_requests_total counter")
+    for label, count in sorted(_request_count.items()):
+        method, path, status = label.split("|", 2)
+        lines.append(
+            f'http_requests_total{{method="{method}",path="{path}",status="{status}"}} {count}'
+        )
+
+    # Request latency histogram
+    lines.append("")
+    lines.append("# HELP http_request_duration_seconds HTTP request latency")
+    lines.append("# TYPE http_request_duration_seconds histogram")
+    for label in sorted(_latency_buckets.keys()):
+        method, path, status = label.split("|", 2)
+        base_labels = f'method="{method}",path="{path}",status="{status}"'
+
+        buckets = _latency_buckets[label]
+        cumulative = 0
+        for bucket in _BUCKETS:
+            cumulative += buckets.get(bucket, 0)
+            le = f"{bucket}"
+            lines.append(
+                f"http_request_duration_seconds_bucket{{{base_labels},le=\"{le}\"}} {cumulative}"
+            )
+        cumulative += buckets.get(float("inf"), 0)
+        lines.append(
+            f'http_request_duration_seconds_bucket{{{base_labels},le="+Inf"}} {cumulative}'
+        )
+        lines.append(
+            f"http_request_duration_seconds_sum{{{base_labels}}} {_request_latency_sum.get(label, 0):.6f}"
+        )
+        lines.append(
+            f"http_request_duration_seconds_count{{{base_labels}}} {_request_latency_count.get(label, 0)}"
+        )
+
+    content = "\n".join(lines) + "\n"
+    return Response(content=content, media_type="text/plain; charset=utf-8")
+
+
+def get_stats() -> dict[str, Any]:
+    """Get metrics as a Python dict (for internal use / admin panel).
+
+    Returns:
+        Dict with total_requests, unique_endpoints, and per-endpoint stats.
+    """
+    total = sum(_request_count.values())
+    endpoints: dict[str, dict[str, Any]] = {}
+
+    for label, count in _request_count.items():
+        method, path, status = label.split("|", 2)
+        key = f"{method} {path}"
+        if key not in endpoints:
+            endpoints[key] = {"count": 0, "statuses": {}}
+        endpoints[key]["count"] += count
+        endpoints[key]["statuses"][status] = (
+            endpoints[key]["statuses"].get(status, 0) + count
+        )
+
+    return {
+        "total_requests": total,
+        "unique_endpoints": len(endpoints),
+        "endpoints": endpoints,
+    }
+{% endraw %}

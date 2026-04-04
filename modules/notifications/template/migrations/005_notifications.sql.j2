@@ -1,0 +1,38 @@
+-- Migration 005: Notifications table for {{ PROJECT_NAME }}
+-- Notifications module — tracks all sent notifications and their delivery status
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id       UUID,
+    channels        TEXT[] NOT NULL DEFAULT '{}',
+    recipient       VARCHAR(500) NOT NULL,
+    subject         VARCHAR(255) NOT NULL,
+    body            TEXT NOT NULL,
+    metadata        JSONB DEFAULT '{}',
+    delivery_status JSONB DEFAULT '[]',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_notifications_sender ON notifications (sender_id);
+CREATE INDEX idx_notifications_created ON notifications (created_at DESC);
+CREATE INDEX idx_notifications_channels ON notifications USING GIN (channels);
+
+-- Notification preferences per user
+CREATE TABLE IF NOT EXISTS notification_preferences (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id     UUID NOT NULL UNIQUE,
+    email       BOOLEAN NOT NULL DEFAULT TRUE,
+    slack       BOOLEAN NOT NULL DEFAULT TRUE,
+    webhook     BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+{% if HAS_AUTH %}
+ALTER TABLE notifications
+    ADD CONSTRAINT fk_notifications_sender
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE notification_preferences
+    ADD CONSTRAINT fk_notif_prefs_user
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+{% endif %}

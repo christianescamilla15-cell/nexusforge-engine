@@ -1,0 +1,151 @@
+"""Notification service for {{ PROJECT_NAME }}.
+
+Dispatches notifications through multiple channels (email, Slack, webhook).
+Stores a history of all sent notifications.
+"""
+
+import uuid
+from datetime import datetime
+from typing import Any, Optional
+
+from .schemas import (
+    SendNotificationResponse,
+    ChannelDeliveryStatus,
+    NotificationItem,
+)
+from .channels.email import send_email
+from .channels.slack import send_slack
+from .channels.webhook import send_webhook
+
+# In-memory notification store — replace with your DB adapter
+_notifications_db: list[dict[str, Any]] = []
+
+# Channel dispatcher map
+_CHANNEL_HANDLERS = {
+    "email": send_email,
+    "slack": send_slack,
+    "webhook": send_webhook,
+}
+
+
+async def send_notification(
+    sender_id: str,
+    channels: list[str],
+    recipient: str,
+    subject: str,
+    body: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> SendNotificationResponse:
+    """Send a notification through the specified channels.
+
+    Args:
+        sender_id: ID of the user or system sending the notification.
+        channels: List of channels to send through (email, slack, webhook).
+        recipient: Recipient identifier (email, Slack channel, webhook URL).
+        subject: Notification subject / title.
+        body: Notification body text.
+        metadata: Optional extra data for the notification.
+
+    Returns:
+        SendNotificationResponse with per-channel delivery statuses.
+    """
+    notification_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    delivery_statuses: list[ChannelDeliveryStatus] = []
+
+    for channel in channels:
+        handler = _CHANNEL_HANDLERS.get(channel)
+        if not handler:
+            delivery_statuses.append(
+                ChannelDeliveryStatus(
+                    channel=channel,
+                    status="failed",
+                    error=f"Unknown channel: {channel}",
+                )
+            )
+            continue
+
+        try:
+            await handler(
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                metadata=metadata,
+            )
+            delivery_statuses.append(
+                ChannelDeliveryStatus(channel=channel, status="sent")
+            )
+        except Exception as exc:
+            delivery_statuses.append(
+                ChannelDeliveryStatus(
+                    channel=channel,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+
+    # Store notification record
+    record = {
+        "id": notification_id,
+        "sender_id": sender_id,
+        "channels": channels,
+        "recipient": recipient,
+        "subject": subject,
+        "body": body,
+        "metadata": metadata or {},
+        "delivery_statuses": [s.model_dump() for s in delivery_statuses],
+        "created_at": now.isoformat(),
+    }
+    _notifications_db.append(record)
+
+    return SendNotificationResponse(
+        notification_id=notification_id,
+        delivery_statuses=delivery_statuses,
+    )
+
+
+async def get_notification_history(
+    user_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[NotificationItem], int]:
+    """Retrieve notification history with optional filters.
+
+    Args:
+        user_id: Filter by sender ID (None = all).
+        channel: Filter by channel (None = all).
+        limit: Maximum results.
+        offset: Pagination offset.
+
+    Returns:
+        Tuple of (list of NotificationItem, total matching count).
+    """
+    filtered = list(_notifications_db)
+
+    if user_id:
+        filtered = [n for n in filtered if n["sender_id"] == user_id]
+
+    if channel:
+        filtered = [n for n in filtered if channel in n["channels"]]
+
+    # Sort newest first
+    filtered.sort(key=lambda n: n["created_at"], reverse=True)
+
+    total = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    items = [
+        NotificationItem(
+            id=n["id"],
+            sender_id=n["sender_id"],
+            channels=n["channels"],
+            recipient=n["recipient"],
+            subject=n["subject"],
+            body=n["body"],
+            delivery_statuses=n["delivery_statuses"],
+            created_at=n["created_at"],
+        )
+        for n in page
+    ]
+    return items, total

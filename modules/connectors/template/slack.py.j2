@@ -1,0 +1,128 @@
+"""Slack connector for {{ PROJECT_NAME }}.
+
+Provides read/write access to Slack channels via the Slack Bot API.
+"""
+
+import os
+import time
+from typing import Any, Optional
+
+import httpx
+
+from .base import ConnectorBase
+
+
+class SlackConnector(ConnectorBase):
+    """Slack connector using Bot OAuth tokens.
+
+    Reads channel messages and posts messages to channels.
+    Requires SLACK_BOT_TOKEN in environment.
+
+    Attributes:
+        name: Human-readable name.
+        connector_type: 'slack'.
+    """
+
+    name = "Slack"
+    connector_type = "slack"
+
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Initialize with optional config override.
+
+        Args:
+            config: May contain 'bot_token' to override env var.
+        """
+        super().__init__(config)
+        self._token: str = config.get("bot_token", "") if config else ""
+        if not self._token:
+            self._token = os.getenv("SLACK_BOT_TOKEN", "")
+        self._base_url = "https://slack.com/api"
+
+    async def connect(self) -> bool:
+        """Verify the Slack token by calling auth.test.
+
+        Returns:
+            True if authentication succeeds.
+
+        Raises:
+            ConnectionError: If the token is invalid.
+        """
+        if not self._token:
+            raise ConnectionError("SLACK_BOT_TOKEN not configured")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/auth.test",
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=10,
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                raise ConnectionError(f"Slack auth failed: {data.get('error')}")
+
+        self.is_connected = True
+        return True
+
+    async def disconnect(self) -> None:
+        """Mark the connector as disconnected."""
+        self.is_connected = False
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Test the Slack connection.
+
+        Returns:
+            Dict with ok, latency_ms, and details.
+        """
+        start = time.monotonic()
+        try:
+            await self.connect()
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": True, "latency_ms": round(latency, 2), "details": "Slack connected"}
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": False, "latency_ms": round(latency, 2), "details": str(exc)}
+
+    async def read(self, resource_id: str, **kwargs: Any) -> Any:
+        """Read messages from a Slack channel.
+
+        Args:
+            resource_id: Channel ID.
+            **kwargs: Optional 'limit' (default 20).
+
+        Returns:
+            List of message dicts.
+        """
+        limit = kwargs.get("limit", 20)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self._base_url}/conversations.history",
+                params={"channel": resource_id, "limit": limit},
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=10,
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"Slack read error: {data.get('error')}")
+            return data.get("messages", [])
+
+    async def write(self, resource_id: str, data: Any, **kwargs: Any) -> Any:
+        """Post a message to a Slack channel.
+
+        Args:
+            resource_id: Channel ID.
+            data: Message text string.
+
+        Returns:
+            Slack API response dict.
+        """
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/chat.postMessage",
+                json={"channel": resource_id, "text": str(data)},
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=10,
+            )
+            result = resp.json()
+            if not result.get("ok"):
+                raise RuntimeError(f"Slack write error: {result.get('error')}")
+            return result

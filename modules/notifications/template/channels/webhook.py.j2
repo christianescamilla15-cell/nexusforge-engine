@@ -1,0 +1,56 @@
+"""Generic webhook notification channel for {{ PROJECT_NAME }}.
+
+Sends notifications as JSON POST requests to arbitrary webhook URLs.
+"""
+
+from typing import Any, Optional
+
+import httpx
+
+
+async def send_webhook(
+    recipient: str,
+    subject: str,
+    body: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    """Send a notification via a generic webhook.
+
+    The recipient is treated as the webhook URL. The notification
+    payload is sent as a JSON POST request.
+
+    Args:
+        recipient: The webhook URL to POST to.
+        subject: Notification subject.
+        body: Notification body text.
+        metadata: Optional extra data to include in the payload.
+
+    Raises:
+        ValueError: If the recipient is not a valid URL.
+        httpx.HTTPStatusError: If the webhook returns a non-2xx status.
+    """
+    if not recipient.startswith(("http://", "https://")):
+        raise ValueError(f"Invalid webhook URL: {recipient}")
+
+    payload: dict[str, Any] = {
+        "event": "notification",
+        "subject": subject,
+        "body": body,
+        "metadata": metadata or {},
+    }
+
+    extra_headers = (metadata or {}).get("headers", {})
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "{{ PROJECT_NAME }}-notifications/1.0",
+        **extra_headers,
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            recipient,
+            json=payload,
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()

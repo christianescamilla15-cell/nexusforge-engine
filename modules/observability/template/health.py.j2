@@ -1,0 +1,104 @@
+"""Health check endpoint for {{ PROJECT_NAME }}.
+
+Returns the health status of the application and its dependencies
+(database, Redis, external services).
+"""
+
+import time
+from typing import Any
+
+from fastapi import APIRouter
+
+from .config import config
+
+router = APIRouter()
+
+
+async def _check_database() -> dict[str, Any]:
+    """Check database connectivity.
+
+    Returns:
+        Dict with 'status' ('healthy'/'unhealthy') and 'latency_ms'.
+    """
+    start = time.monotonic()
+    try:
+        # Replace with your actual DB check
+        # e.g., await db.execute("SELECT 1")
+        latency = (time.monotonic() - start) * 1000
+        return {"status": "healthy", "latency_ms": round(latency, 2)}
+    except Exception as exc:
+        latency = (time.monotonic() - start) * 1000
+        return {"status": "unhealthy", "latency_ms": round(latency, 2), "error": str(exc)}
+
+
+async def _check_redis() -> dict[str, Any]:
+    """Check Redis connectivity.
+
+    Returns:
+        Dict with 'status' and 'latency_ms'.
+    """
+    start = time.monotonic()
+    try:
+        # Replace with your actual Redis check
+        # e.g., await redis.ping()
+        latency = (time.monotonic() - start) * 1000
+        return {"status": "healthy", "latency_ms": round(latency, 2)}
+    except Exception as exc:
+        latency = (time.monotonic() - start) * 1000
+        return {"status": "unhealthy", "latency_ms": round(latency, 2), "error": str(exc)}
+
+
+@router.get("/health")
+async def health_check() -> dict[str, Any]:
+    """Comprehensive health check endpoint.
+
+    Checks the status of all critical dependencies and returns
+    an overall health status.
+
+    Returns:
+        Dict with overall status, service name, uptime info,
+        and per-dependency health.
+    """
+    db_health = await _check_database()
+    redis_health = await _check_redis()
+
+    dependencies = {
+        "database": db_health,
+        "redis": redis_health,
+    }
+
+    all_healthy = all(
+        dep.get("status") == "healthy" for dep in dependencies.values()
+    )
+
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "service": config.service_name,
+        "dependencies": dependencies,
+    }
+
+
+@router.get("/health/live")
+async def liveness() -> dict[str, str]:
+    """Kubernetes liveness probe — always returns OK if the process is running.
+
+    Returns:
+        Simple status dict.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/health/ready")
+async def readiness() -> dict[str, Any]:
+    """Kubernetes readiness probe — checks if the service can handle requests.
+
+    Returns:
+        Status dict with dependency health.
+    """
+    db_health = await _check_database()
+
+    is_ready = db_health.get("status") == "healthy"
+    return {
+        "status": "ready" if is_ready else "not_ready",
+        "database": db_health,
+    }

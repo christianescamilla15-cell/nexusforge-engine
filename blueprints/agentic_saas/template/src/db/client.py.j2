@@ -1,0 +1,63 @@
+"""Async PostgreSQL connection pool with optional Redis."""
+import os
+from typing import Any, Optional
+
+import asyncpg
+
+_pool: Optional[asyncpg.Pool] = None
+_redis: Any = None
+
+
+async def get_pool() -> asyncpg.Pool:
+    """Return the shared PostgreSQL connection pool, creating it on first call.
+
+    Returns:
+        asyncpg.Pool instance ready for queries.
+
+    Raises:
+        RuntimeError: If DATABASE_URL is not set.
+    """
+    global _pool
+    if _pool is None:
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError(
+                "DATABASE_URL environment variable is required. "
+                "Example: postgresql://user:pass@localhost:5432/{{ PROJECT_NAME | lower | replace(' ', '_') }}"
+            )
+        _pool = await asyncpg.create_pool(
+            database_url,
+            min_size=2,
+            max_size=20,
+            command_timeout=30,
+        )
+    return _pool
+
+
+async def get_redis() -> Any:
+    """Return the shared Redis client, creating it on first call.
+
+    Returns None if REDIS_URL is not configured (Redis is optional).
+    """
+    global _redis
+    if _redis is None:
+        redis_url = os.environ.get("REDIS_URL")
+        if not redis_url:
+            return None
+        try:
+            import redis.asyncio as aioredis
+            _redis = aioredis.from_url(redis_url, decode_responses=True)
+        except ImportError:
+            return None
+    return _redis
+
+
+async def close_pool() -> None:
+    """Close the PostgreSQL pool and Redis connection gracefully."""
+    global _pool, _redis
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
+    if _redis is not None:
+        await _redis.close()
+        _redis = None

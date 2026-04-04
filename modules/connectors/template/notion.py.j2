@@ -1,0 +1,130 @@
+"""Notion connector for {{ PROJECT_NAME }}.
+
+Provides read/write access to Notion databases and pages
+via the Notion API.
+"""
+
+import os
+import time
+from typing import Any, Optional
+
+from .base import ConnectorBase
+
+
+class NotionConnector(ConnectorBase):
+    """Notion API connector.
+
+    Reads pages/databases and creates pages in Notion workspaces.
+    Requires NOTION_API_KEY in environment.
+
+    Attributes:
+        name: Human-readable name.
+        connector_type: 'notion'.
+    """
+
+    name = "Notion"
+    connector_type = "notion"
+
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Initialize with optional config override.
+
+        Args:
+            config: May contain 'api_key' to override env var.
+        """
+        super().__init__(config)
+        self._api_key: str = (config or {}).get(
+            "api_key", os.getenv("NOTION_API_KEY", "")
+        )
+        self._client: Any = None
+
+    async def connect(self) -> bool:
+        """Authenticate with Notion and verify access.
+
+        Returns:
+            True if authentication succeeds.
+
+        Raises:
+            ConnectionError: If the API key is missing or invalid.
+        """
+        if not self._api_key:
+            raise ConnectionError("NOTION_API_KEY not configured")
+
+        try:
+            from notion_client import AsyncClient
+
+            self._client = AsyncClient(auth=self._api_key)
+            # Verify by fetching the bot user
+            await self._client.users.me()
+            self.is_connected = True
+            return True
+        except ImportError:
+            raise ConnectionError("notion-client package not installed")
+        except Exception as exc:
+            raise ConnectionError(f"Notion auth failed: {exc}") from exc
+
+    async def disconnect(self) -> None:
+        """Clear the Notion client."""
+        self._client = None
+        self.is_connected = False
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Test Notion connection.
+
+        Returns:
+            Dict with ok, latency_ms, details.
+        """
+        start = time.monotonic()
+        try:
+            await self.connect()
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": True, "latency_ms": round(latency, 2), "details": "Notion connected"}
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return {"ok": False, "latency_ms": round(latency, 2), "details": str(exc)}
+
+    async def read(self, resource_id: str, **kwargs: Any) -> Any:
+        """Query a Notion database or retrieve a page.
+
+        Args:
+            resource_id: Notion database ID or page ID.
+            **kwargs: Optional 'page_size' (default 50), 'resource_type'
+                      ('database' or 'page', default 'database').
+
+        Returns:
+            Query results (list of pages) or page content.
+        """
+        if not self._client:
+            await self.connect()
+
+        resource_type = kwargs.get("resource_type", "database")
+
+        if resource_type == "page":
+            return await self._client.pages.retrieve(page_id=resource_id)
+
+        page_size = kwargs.get("page_size", 50)
+        response = await self._client.databases.query(
+            database_id=resource_id,
+            page_size=page_size,
+        )
+        return response.get("results", [])
+
+    async def write(self, resource_id: str, data: Any, **kwargs: Any) -> Any:
+        """Create a page in a Notion database.
+
+        Args:
+            resource_id: Target database ID.
+            data: Dict with 'properties' matching the database schema.
+
+        Returns:
+            Created page metadata.
+        """
+        if not self._client:
+            await self.connect()
+
+        properties = data if isinstance(data, dict) else {"title": str(data)}
+
+        page = await self._client.pages.create(
+            parent={"database_id": resource_id},
+            properties=properties,
+        )
+        return page

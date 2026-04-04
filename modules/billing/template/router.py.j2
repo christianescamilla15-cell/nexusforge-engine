@@ -1,0 +1,124 @@
+"""Billing routes for {{ PROJECT_NAME }}.
+
+Stripe-based checkout, webhook handling, and subscription management.
+"""
+
+import os
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from .schemas import CheckoutRequest, CheckoutResponse, SubscriptionStatus
+from .service import (
+    create_checkout_session,
+    get_subscription_status,
+    handle_stripe_webhook,
+)
+{% if HAS_AUTH %}
+from src.auth.dependencies import get_current_user
+{% endif %}
+
+router = APIRouter()
+
+
+@router.post("/checkout", response_model=CheckoutResponse)
+async def checkout(
+    payload: CheckoutRequest,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> CheckoutResponse:
+    """Create a Stripe Checkout session for a subscription plan.
+
+    Args:
+        payload: Contains the price_id for the desired plan.
+        current_user: Authenticated user (injected).
+
+    Returns:
+        CheckoutResponse with the Stripe session URL.
+
+    Raises:
+        HTTPException 400: If the checkout session cannot be created.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+    user_email = current_user["email"]
+{% else %}
+    user_id = "anonymous"
+    user_email = payload.email
+{% endif %}
+    try:
+        session = await create_checkout_session(
+            user_id=user_id,
+            email=user_email,
+            price_id=payload.price_id,
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
+        )
+        return CheckoutResponse(
+            session_id=session["id"],
+            url=session["url"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create checkout session: {exc}",
+        )
+
+
+@router.get("/subscription", response_model=SubscriptionStatus)
+async def subscription_status(
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> SubscriptionStatus:
+    """Return the current subscription status for the authenticated user.
+
+    Args:
+        current_user: Authenticated user (injected).
+
+    Returns:
+        SubscriptionStatus with plan, status, and period dates.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+{% else %}
+    user_id = "anonymous"
+{% endif %}
+    sub = await get_subscription_status(user_id)
+    if not sub:
+        return SubscriptionStatus(
+            user_id=user_id,
+            plan="free",
+            status="active",
+        )
+    return sub
+
+
+@router.post("/webhook", status_code=status.HTTP_200_OK)
+async def stripe_webhook(request: Request) -> dict[str, str]:
+    """Handle incoming Stripe webhook events.
+
+    Verifies the webhook signature using STRIPE_WEBHOOK_SECRET, then
+    dispatches the event to the appropriate handler.
+
+    Args:
+        request: Raw FastAPI request with the Stripe event payload.
+
+    Returns:
+        Acknowledgement dict.
+
+    Raises:
+        HTTPException 400: If the signature is invalid.
+    """
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        result = await handle_stripe_webhook(payload, sig_header)
+        return {"status": "ok", "event_type": result.get("type", "unknown")}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Webhook error: {exc}",
+        )

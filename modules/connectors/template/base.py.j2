@@ -1,0 +1,101 @@
+"""Connector base class for {{ PROJECT_NAME }}.
+
+All connectors inherit from ConnectorBase and implement the standard
+interface for authentication, data operations, and health checks.
+"""
+
+from abc import ABC, abstractmethod
+from typing import Any, Optional
+
+
+class ConnectorBase(ABC):
+    """Abstract base class for all external connectors.
+
+    Each connector wraps an external service (Slack, Drive, Notion, etc.)
+    and provides a unified interface for authentication, reading, writing,
+    and health checking.
+
+    Attributes:
+        name: Human-readable connector name.
+        connector_type: Machine identifier (slack, google_drive, etc.).
+        config: Connector-specific configuration.
+        is_connected: Whether the connector has been authenticated.
+    """
+
+    name: str
+    connector_type: str
+
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Initialize the connector with optional configuration.
+
+        Args:
+            config: Connector-specific settings (API keys, URLs, etc.).
+                    All secrets should come from env vars, not hardcoded.
+        """
+        self.config: dict[str, Any] = config or {}
+        self.is_connected: bool = False
+
+    @abstractmethod
+    async def connect(self) -> bool:
+        """Establish a connection to the external service.
+
+        Returns:
+            True if the connection was successful.
+
+        Raises:
+            ConnectionError: If the connection fails.
+        """
+        ...
+
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Cleanly disconnect from the external service."""
+        ...
+
+    @abstractmethod
+    async def test_connection(self) -> dict[str, Any]:
+        """Test the connection and return diagnostic info.
+
+        Returns:
+            Dict with 'ok' (bool), 'latency_ms' (float), and 'details' (str).
+        """
+        ...
+
+    @abstractmethod
+    async def read(self, resource_id: str, **kwargs: Any) -> Any:
+        """Read data from the external service.
+
+        Args:
+            resource_id: Identifier for the resource to read.
+            **kwargs: Additional parameters.
+
+        Returns:
+            The data from the external service.
+        """
+        ...
+
+    @abstractmethod
+    async def write(self, resource_id: str, data: Any, **kwargs: Any) -> Any:
+        """Write data to the external service.
+
+        Args:
+            resource_id: Identifier for the target resource.
+            data: The data to write.
+            **kwargs: Additional parameters.
+
+        Returns:
+            Confirmation or result from the service.
+        """
+        ...
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize connector metadata to a dictionary.
+
+        Returns:
+            Dict with connector type, name, and connection status.
+        """
+        return {
+            "connector_type": self.connector_type,
+            "name": self.name,
+            "is_connected": self.is_connected,
+        }

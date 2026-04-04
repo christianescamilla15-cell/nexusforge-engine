@@ -1,0 +1,174 @@
+"""AI Chat service for {{ PROJECT_NAME }}.
+
+Manages conversations and delegates to the configured LLM provider.
+Supports Groq, Claude (Anthropic), and OpenAI with automatic fallback.
+"""
+
+import uuid
+from datetime import datetime
+from typing import Any, AsyncIterator, Optional
+
+from .schemas import ChatResponse, ConversationHistory, MessageItem
+from .llm_client import get_llm_client
+
+# In-memory conversation store — replace with your DB adapter
+_conversations: dict[str, list[dict[str, Any]]] = {}
+
+
+async def send_message(
+    user_id: str,
+    content: str,
+    conversation_id: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+) -> ChatResponse:
+    """Send a user message and get a complete AI response.
+
+    Args:
+        user_id: ID of the user sending the message.
+        content: The user's message text.
+        conversation_id: Existing conversation ID, or None to start new.
+        system_prompt: Optional system prompt override.
+
+    Returns:
+        ChatResponse with the assistant's reply.
+    """
+    conv_id = conversation_id or str(uuid.uuid4())
+
+    # Initialize conversation if new
+    if conv_id not in _conversations:
+        _conversations[conv_id] = []
+
+    # Append user message
+    user_msg = {
+        "role": "user",
+        "content": content,
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+    }
+    _conversations[conv_id].append(user_msg)
+
+    # Build message history for the LLM
+    messages = _build_messages(conv_id, system_prompt)
+
+    # Get LLM response
+    client = get_llm_client()
+    reply = await client.complete(messages)
+
+    # Store assistant response
+    assistant_msg = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _conversations[conv_id].append(assistant_msg)
+
+    return ChatResponse(
+        conversation_id=conv_id,
+        content=reply,
+        role="assistant",
+    )
+
+
+async def stream_message(
+    user_id: str,
+    content: str,
+    conversation_id: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+) -> AsyncIterator[str]:
+    """Stream an AI response chunk by chunk.
+
+    Args:
+        user_id: ID of the user.
+        content: The user's message.
+        conversation_id: Existing conversation ID, or None to start new.
+        system_prompt: Optional system prompt override.
+
+    Yields:
+        Text chunks from the LLM response.
+    """
+    conv_id = conversation_id or str(uuid.uuid4())
+
+    if conv_id not in _conversations:
+        _conversations[conv_id] = []
+
+    user_msg = {
+        "role": "user",
+        "content": content,
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+    }
+    _conversations[conv_id].append(user_msg)
+
+    messages = _build_messages(conv_id, system_prompt)
+
+    client = get_llm_client()
+    full_response = ""
+
+    async for chunk in client.stream(messages):
+        full_response += chunk
+        yield chunk
+
+    # Store the complete response
+    assistant_msg = {
+        "role": "assistant",
+        "content": full_response,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _conversations[conv_id].append(assistant_msg)
+
+
+async def get_conversation_history(
+    conversation_id: str,
+    user_id: str,
+) -> Optional[ConversationHistory]:
+    """Retrieve full message history for a conversation.
+
+    Args:
+        conversation_id: The conversation to look up.
+        user_id: Owner of the conversation (for access control).
+
+    Returns:
+        ConversationHistory if found, None otherwise.
+    """
+    messages = _conversations.get(conversation_id)
+    if messages is None:
+        return None
+
+    items = [
+        MessageItem(
+            role=m["role"],
+            content=m["content"],
+            timestamp=m["timestamp"],
+        )
+        for m in messages
+    ]
+
+    return ConversationHistory(
+        conversation_id=conversation_id,
+        messages=items,
+        message_count=len(items),
+    )
+
+
+def _build_messages(
+    conversation_id: str,
+    system_prompt: Optional[str] = None,
+) -> list[dict[str, str]]:
+    """Build the message list for the LLM from conversation history.
+
+    Args:
+        conversation_id: The conversation to build messages from.
+        system_prompt: Optional system prompt to prepend.
+
+    Returns:
+        List of {'role': ..., 'content': ...} dicts.
+    """
+    messages: list[dict[str, str]] = []
+
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    for msg in _conversations.get(conversation_id, []):
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    return messages

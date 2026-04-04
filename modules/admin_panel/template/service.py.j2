@@ -1,0 +1,174 @@
+"""Admin panel service for {{ PROJECT_NAME }}.
+
+Business logic for user management, system statistics, and configuration.
+"""
+
+import os
+from datetime import datetime
+from typing import Any, Optional
+
+from .schemas import SystemStats, ConfigResponse, AdminUserItem
+
+
+# ---------------------------------------------------------------------------
+# User management
+# ---------------------------------------------------------------------------
+
+async def list_users(
+    limit: int = 50,
+    offset: int = 0,
+    role: Optional[str] = None,
+) -> tuple[list[AdminUserItem], int]:
+    """List all users with optional role filtering.
+
+    Args:
+        limit: Maximum results.
+        offset: Pagination offset.
+        role: Optional role filter.
+
+    Returns:
+        Tuple of (user items list, total count).
+    """
+{% if HAS_AUTH %}
+    from src.auth.service import _users_db
+
+    users = list(_users_db.values())
+
+    if role:
+        users = [u for u in users if u.get("role") == role]
+
+    total = len(users)
+    page = users[offset : offset + limit]
+
+    items = [
+        AdminUserItem(
+            id=u["id"],
+            email=u["email"],
+            name=u.get("name"),
+            role=u.get("role", "user"),
+            is_active=u.get("is_active", True),
+            created_at=u.get("created_at", datetime.utcnow()).isoformat()
+            if isinstance(u.get("created_at"), datetime)
+            else str(u.get("created_at", "")),
+        )
+        for u in page
+    ]
+    return items, total
+{% else %}
+    return [], 0
+{% endif %}
+
+
+# ---------------------------------------------------------------------------
+# System statistics
+# ---------------------------------------------------------------------------
+
+async def get_system_stats() -> SystemStats:
+    """Gather system-wide statistics.
+
+    Returns:
+        SystemStats with user counts, module info, and request metrics.
+    """
+    total_users = 0
+    active_users = 0
+
+{% if HAS_AUTH %}
+    from src.auth.service import _users_db
+    total_users = len(_users_db)
+    active_users = sum(1 for u in _users_db.values() if u.get("is_active", True))
+{% endif %}
+
+    # Collect active modules
+    active_modules: list[str] = []
+{% if HAS_AUTH %}
+    active_modules.append("auth")
+{% endif %}
+{% if HAS_BILLING %}
+    active_modules.append("billing")
+{% endif %}
+{% if HAS_ANALYTICS %}
+    active_modules.append("analytics")
+{% endif %}
+{% if HAS_AI_CHAT %}
+    active_modules.append("ai_chat")
+{% endif %}
+{% if HAS_NOTIFICATIONS %}
+    active_modules.append("notifications")
+{% endif %}
+{% if HAS_CONNECTORS %}
+    active_modules.append("connectors")
+{% endif %}
+{% if HAS_OBSERVABILITY %}
+    active_modules.append("observability")
+{% endif %}
+    active_modules.append("admin_panel")
+
+    # Request metrics from observability if available
+    total_requests = 0
+{% if HAS_OBSERVABILITY %}
+    try:
+        from src.observability.metrics import get_stats
+        metrics = get_stats()
+        total_requests = metrics.get("total_requests", 0)
+    except ImportError:
+        pass
+{% endif %}
+
+    return SystemStats(
+        total_users=total_users,
+        active_users=active_users,
+        active_modules=active_modules,
+        total_requests=total_requests,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Configuration viewer
+# ---------------------------------------------------------------------------
+
+async def get_config() -> ConfigResponse:
+    """Return the current system configuration with secrets masked.
+
+    Returns:
+        ConfigResponse with all non-sensitive settings.
+    """
+    # Collect env vars that are relevant, masking secrets
+    settings: dict[str, str] = {}
+    sensitive_keys = {"KEY", "SECRET", "PASSWORD", "TOKEN", "DSN"}
+
+    for key, value in sorted(os.environ.items()):
+        if any(s in key.upper() for s in sensitive_keys):
+            settings[key] = "***MASKED***"
+        elif key.startswith(("DATABASE", "LOG_", "AI_", "SMTP_", "ADMIN_", "SERVICE_")):
+            settings[key] = value
+
+    modules_active: list[str] = []
+{% if HAS_AUTH %}
+    modules_active.append("auth")
+{% endif %}
+{% if HAS_BILLING %}
+    modules_active.append("billing")
+{% endif %}
+{% if HAS_ANALYTICS %}
+    modules_active.append("analytics")
+{% endif %}
+{% if HAS_AI_CHAT %}
+    modules_active.append("ai_chat")
+{% endif %}
+{% if HAS_NOTIFICATIONS %}
+    modules_active.append("notifications")
+{% endif %}
+{% if HAS_CONNECTORS %}
+    modules_active.append("connectors")
+{% endif %}
+{% if HAS_OBSERVABILITY %}
+    modules_active.append("observability")
+{% endif %}
+    modules_active.append("admin_panel")
+
+    return ConfigResponse(
+        project_name="{{ PROJECT_NAME }}",
+        environment=os.getenv("ENVIRONMENT", "development"),
+        modules=modules_active,
+        settings=settings,
+    )

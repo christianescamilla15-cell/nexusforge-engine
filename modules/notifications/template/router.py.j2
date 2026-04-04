@@ -1,0 +1,94 @@
+"""Notification routes for {{ PROJECT_NAME }}.
+
+Send notifications and view notification history.
+"""
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query, status
+
+from .schemas import (
+    SendNotificationRequest,
+    SendNotificationResponse,
+    NotificationHistoryResponse,
+)
+from .service import send_notification, get_notification_history
+{% if HAS_AUTH %}
+from src.auth.dependencies import get_current_user
+{% endif %}
+
+router = APIRouter()
+
+
+@router.post("/send", response_model=SendNotificationResponse, status_code=status.HTTP_201_CREATED)
+async def send(
+    payload: SendNotificationRequest,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> SendNotificationResponse:
+    """Send a notification through one or more channels.
+
+    Supported channels: email, slack, webhook.
+    Multiple channels can be specified to send via all of them.
+
+    Args:
+        payload: Notification data including channel, recipient, and message.
+        current_user: Authenticated user (injected).
+
+    Returns:
+        SendNotificationResponse with delivery statuses per channel.
+    """
+{% if HAS_AUTH %}
+    sender_id = current_user["id"]
+{% else %}
+    sender_id = "system"
+{% endif %}
+    result = await send_notification(
+        sender_id=sender_id,
+        channels=payload.channels,
+        recipient=payload.recipient,
+        subject=payload.subject,
+        body=payload.body,
+        metadata=payload.metadata,
+    )
+    return result
+
+
+@router.get("/history", response_model=NotificationHistoryResponse)
+async def history(
+    limit: int = Query(50, ge=1, le=500, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    channel: str | None = Query(None, description="Filter by channel"),
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> NotificationHistoryResponse:
+    """Retrieve notification history with optional filtering.
+
+    Args:
+        limit: Maximum number of notifications to return.
+        offset: Pagination offset.
+        channel: Optional channel filter (email, slack, webhook).
+        current_user: Authenticated user (injected).
+
+    Returns:
+        Paginated list of sent notifications.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+{% else %}
+    user_id = None
+{% endif %}
+    notifications, total = await get_notification_history(
+        user_id=user_id,
+        channel=channel,
+        limit=limit,
+        offset=offset,
+    )
+    return NotificationHistoryResponse(
+        notifications=notifications,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

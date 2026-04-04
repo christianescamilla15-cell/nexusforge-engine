@@ -1,0 +1,62 @@
+"""Pydantic schemas for the billing module in {{ PROJECT_NAME }}."""
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class CheckoutRequest(BaseModel):
+    """Request to create a Stripe Checkout session.
+
+    Attributes:
+        price_id: Stripe Price ID for the desired plan.
+        success_url: Redirect URL after successful payment.
+        cancel_url: Redirect URL if the user cancels checkout.
+        email: Customer email (used only when auth module is not present).
+    """
+
+    price_id: str = Field(..., description="Stripe Price ID")
+    success_url: str = Field(
+        "http://localhost:3000/billing/success",
+        description="Redirect on success",
+    )
+    cancel_url: str = Field(
+        "http://localhost:3000/billing/cancel",
+        description="Redirect on cancel",
+    )
+    email: Optional[str] = Field(None, description="Customer email (no-auth fallback)")
+
+
+class CheckoutResponse(BaseModel):
+    """Response from checkout session creation.
+
+    Attributes:
+        session_id: Stripe Checkout Session ID.
+        url: Hosted checkout page URL to redirect the user to.
+    """
+
+    session_id: str = Field(..., description="Stripe session ID")
+    url: str = Field(..., description="Checkout page URL")
+
+
+class SubscriptionStatus(BaseModel):
+    """Current subscription status for a user.
+
+    Attributes:
+        user_id: Internal user ID.
+        plan: Plan name (free, pro, enterprise).
+        status: Stripe subscription status.
+        stripe_subscription_id: Stripe subscription ID.
+        current_period_start: Start of current billing period.
+        current_period_end: End of current billing period.
+    """
+
+    user_id: str = Field(..., description="Internal user ID")
+    plan: str = Field("free", description="Plan name")
+    status: str = Field("active", description="Subscription status")
+    stripe_subscription_id: Optional[str] = Field(
+        None, description="Stripe subscription ID"
+    )
+    current_period_start: Optional[datetime] = Field(None, description="Period start")
+    current_period_end: Optional[datetime] = Field(None, description="Period end")

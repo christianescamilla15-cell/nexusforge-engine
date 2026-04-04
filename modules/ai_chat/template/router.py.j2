@@ -1,0 +1,145 @@
+"""AI Chat routes for {{ PROJECT_NAME }}.
+
+Chat endpoint with streaming SSE support and conversation history.
+"""
+
+import json
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+
+from .schemas import ChatMessage, ChatResponse, ConversationHistory
+from .service import send_message, get_conversation_history, stream_message
+{% if HAS_AUTH %}
+from src.auth.dependencies import get_current_user
+{% endif %}
+
+router = APIRouter()
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(
+    message: ChatMessage,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> ChatResponse:
+    """Send a message and receive an AI response.
+
+    Args:
+        message: The user message with optional conversation_id.
+        current_user: Authenticated user (injected if auth is present).
+
+    Returns:
+        ChatResponse with the assistant's reply and conversation ID.
+
+    Raises:
+        HTTPException 500: If the LLM provider returns an error.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+{% else %}
+    user_id = message.user_id or "anonymous"
+{% endif %}
+    try:
+        response = await send_message(
+            user_id=user_id,
+            content=message.content,
+            conversation_id=message.conversation_id,
+            system_prompt=message.system_prompt,
+        )
+        return response
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"LLM error: {exc}",
+        )
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    message: ChatMessage,
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+):
+    """Send a message and stream the AI response as Server-Sent Events.
+
+    Each SSE event contains a JSON object with a 'content' field
+    (text chunk) or a 'done' field (boolean) on the final event.
+
+    Args:
+        message: The user message.
+        current_user: Authenticated user (injected).
+
+    Returns:
+        StreamingResponse with text/event-stream content type.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+{% else %}
+    user_id = message.user_id or "anonymous"
+{% endif %}
+
+    async def event_generator():
+        """Yield SSE-formatted chunks from the LLM."""
+        try:
+            async for chunk in stream_message(
+                user_id=user_id,
+                content=message.content,
+                conversation_id=message.conversation_id,
+                system_prompt=message.system_prompt,
+            ):
+                data = json.dumps({"content": chunk})
+                yield f"data: {data}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except Exception as exc:
+            error_data = json.dumps({"error": str(exc)})
+            yield f"data: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/history", response_model=ConversationHistory)
+async def history(
+    conversation_id: str = Query(..., description="Conversation ID"),
+{% if HAS_AUTH %}
+    current_user: dict[str, Any] = Depends(get_current_user),
+{% endif %}
+) -> ConversationHistory:
+    """Retrieve the message history for a conversation.
+
+    Args:
+        conversation_id: The conversation to retrieve.
+        current_user: Authenticated user (injected).
+
+    Returns:
+        ConversationHistory with all messages.
+
+    Raises:
+        HTTPException 404: If the conversation is not found.
+    """
+{% if HAS_AUTH %}
+    user_id = current_user["id"]
+{% else %}
+    user_id = "anonymous"
+{% endif %}
+    conv = await get_conversation_history(
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return conv

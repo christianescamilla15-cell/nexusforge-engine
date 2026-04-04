@@ -1,0 +1,164 @@
+"""Tests for invoice extraction and validation."""
+import json
+from datetime import date
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from main import app
+from src.invoices.models import InvoiceExtraction, LineItem, InvoiceStatus
+from src.invoices.extractor import _parse_extraction, _to_model
+from src.invoices.validator import validate_invoice
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+# -- Extraction helper tests --
+
+def test_parse_valid_extraction_json():
+    raw = json.dumps({
+        "vendor_name": "Acme Corp",
+        "invoice_number": "INV-001",
+        "invoice_date": "2025-03-15",
+        "total_amount": 1500.00,
+        "subtotal": 1400.00,
+        "tax": 100.00,
+        "currency": "USD",
+        "confidence": 0.92,
+        "line_items": [],
+    })
+    result = _parse_extraction(raw)
+    assert result["vendor_name"] == "Acme Corp"
+    assert result["total_amount"] == 1500.00
+
+
+def test_parse_extraction_with_markdown_fences():
+    raw = '```json\n{"vendor_name": "Test LLC", "invoice_date": "2025-01-01", "total_amount": 100}\n```'
+    result = _parse_extraction(raw)
+    assert result["vendor_name"] == "Test LLC"
+
+
+def test_parse_extraction_invalid_json():
+    result = _parse_extraction("not valid json at all")
+    assert result == {}
+
+
+def test_to_model_with_line_items():
+    data = {
+        "vendor_name": "Widgets Inc",
+        "invoice_date": "2025-06-01",
+        "subtotal": 200,
+        "total_amount": 216,
+        "tax": 16,
+        "currency": "USD",
+        "confidence": 0.88,
+        "line_items": [
+            {"description": "Widget A", "quantity": 2, "unit_price": 50, "total": 100},
+            {"description": "Widget B", "quantity": 1, "unit_price": 100, "total": 100},
+        ],
+    }
+    extraction = _to_model(data)
+    assert extraction.vendor_name == "Widgets Inc"
+    assert len(extraction.line_items) == 2
+    assert extraction.line_items[0].quantity == Decimal("2")
+
+
+# -- Validator tests --
+
+def test_valid_invoice_passes():
+    extraction = InvoiceExtraction(
+        vendor_name="Good Vendor",
+        invoice_date=date(2025, 1, 15),
+        subtotal=Decimal("100.00"),
+        tax=Decimal("8.00"),
+        total_amount=Decimal("108.00"),
+        currency="USD",
+        confidence=0.9,
+        line_items=[
+            LineItem(description="Service", quantity=Decimal("1"), unit_price=Decimal("100"), total=Decimal("100")),
+        ],
+    )
+    errors = validate_invoice(extraction)
+    assert errors == []
+
+
+def test_amount_mismatch_detected():
+    extraction = InvoiceExtraction(
+        vendor_name="Mismatch Corp",
+        invoice_date=date(2025, 1, 15),
+        subtotal=Decimal("100.00"),
+        tax=Decimal("10.00"),
+        total_amount=Decimal("200.00"),  # wrong
+        currency="USD",
+        confidence=0.7,
+    )
+    errors = validate_invoice(extraction)
+    assert any("mismatch" in e.lower() for e in errors)
+
+
+def test_negative_total_rejected():
+    extraction = InvoiceExtraction(
+        vendor_name="Bad Total",
+        invoice_date=date(2025, 1, 15),
+        subtotal=Decimal("0"),
+        total_amount=Decimal("-50"),
+        currency="USD",
+        confidence=0.5,
+    )
+    errors = validate_invoice(extraction)
+    assert any("greater than zero" in e for e in errors)
+
+
+def test_unknown_currency_rejected():
+    extraction = InvoiceExtraction(
+        vendor_name="Foreign",
+        invoice_date=date(2025, 1, 15),
+        subtotal=Decimal("100"),
+        total_amount=Decimal("100"),
+        currency="XYZ",
+        confidence=0.8,
+    )
+    errors = validate_invoice(extraction)
+    assert any("currency" in e.lower() for e in errors)
+
+
+def test_due_date_before_invoice_date():
+    extraction = InvoiceExtraction(
+        vendor_name="Time Travel",
+        invoice_date=date(2025, 6, 15),
+        due_date=date(2025, 6, 1),
+        subtotal=Decimal("100"),
+        total_amount=Decimal("100"),
+        currency="USD",
+        confidence=0.8,
+    )
+    errors = validate_invoice(extraction)
+    assert any("due date" in e.lower() for e in errors)
+
+
+def test_line_item_math_check():
+    extraction = InvoiceExtraction(
+        vendor_name="Line Check",
+        invoice_date=date(2025, 3, 1),
+        subtotal=Decimal("100"),
+        total_amount=Decimal("100"),
+        currency="USD",
+        confidence=0.9,
+        line_items=[
+            LineItem(description="Item", quantity=Decimal("3"), unit_price=Decimal("10"), total=Decimal("50")),
+        ],
+    )
+    errors = validate_invoice(extraction)
+    assert any("line item" in e.lower() for e in errors)

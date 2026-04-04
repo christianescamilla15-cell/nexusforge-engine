@@ -1,0 +1,73 @@
+"""Agent registry -- register, discover, and invoke agents by ID."""
+from typing import Any
+from fastapi import APIRouter, HTTPException
+
+from src.agents.base import BaseAgent, AgentResult
+
+router = APIRouter()
+
+_REGISTRY: dict[str, type[BaseAgent]] = {}
+
+
+def register_agent(agent_id: str, agent_cls: type[BaseAgent]) -> None:
+    """Register an agent class under a unique ID.
+
+    Args:
+        agent_id: Unique string identifier for the agent.
+        agent_cls: The BaseAgent subclass to register.
+
+    Raises:
+        ValueError: If agent_id is already registered.
+    """
+    if agent_id in _REGISTRY:
+        raise ValueError(f"Agent '{agent_id}' is already registered")
+    _REGISTRY[agent_id] = agent_cls
+
+
+def get_agent(agent_id: str, config: dict[str, Any] | None = None) -> BaseAgent:
+    """Instantiate a registered agent by ID.
+
+    Args:
+        agent_id: The registered agent identifier.
+        config: Optional configuration dict passed to the agent constructor.
+
+    Returns:
+        An instance of the registered BaseAgent subclass.
+
+    Raises:
+        KeyError: If agent_id is not found in the registry.
+    """
+    if agent_id not in _REGISTRY:
+        raise KeyError(f"Agent '{agent_id}' not found. Available: {list(_REGISTRY.keys())}")
+    return _REGISTRY[agent_id](agent_id=agent_id, config=config)
+
+
+def list_agents() -> list[str]:
+    """Return all registered agent IDs."""
+    return sorted(_REGISTRY.keys())
+
+
+# -- API routes --
+
+@router.get("/")
+async def api_list_agents() -> dict[str, list[str]]:
+    """List all registered agent IDs."""
+    return {"agents": list_agents()}
+
+
+@router.post("/{agent_id}/run")
+async def api_run_agent(agent_id: str, payload: dict[str, Any]) -> dict:
+    """Run a single agent by ID with the given input payload."""
+    try:
+        agent = get_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    result: AgentResult = await agent.execute(payload)
+    return {
+        "agent_id": result.agent_id,
+        "success": result.success,
+        "output": result.output,
+        "error": result.error,
+        "duration_ms": result.duration_ms,
+    }

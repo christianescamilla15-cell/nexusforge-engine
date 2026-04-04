@@ -1,0 +1,86 @@
+"""FastAPI authentication dependencies for {{ PROJECT_NAME }}.
+
+Provides injectable dependencies for protecting routes with JWT auth
+and role-based access control.
+"""
+
+from typing import Any
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+
+from .service import decode_token, get_user_by_id
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict[str, Any]:
+    """Extract and validate the current user from the Bearer token.
+
+    Args:
+        token: JWT access token extracted from the Authorization header.
+
+    Returns:
+        User dictionary from the database.
+
+    Raises:
+        HTTPException 401: If the token is missing, invalid, or expired.
+        HTTPException 401: If the user no longer exists or is deactivated.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    payload = decode_token(token)
+    if payload is None:
+        raise credentials_exception
+
+    if payload.get("type") != "access":
+        raise credentials_exception
+
+    user_id: str | None = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+
+    user = await get_user_by_id(user_id)
+    if user is None:
+        raise credentials_exception
+
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+
+    return user
+
+
+def require_role(*allowed_roles: str):
+    """Create a dependency that enforces role-based access.
+
+    Usage::
+
+        @router.get("/admin-only")
+        async def admin_route(user=Depends(require_role("admin", "superadmin"))):
+            ...
+
+    Args:
+        allowed_roles: One or more role strings that are permitted.
+
+    Returns:
+        A FastAPI dependency function.
+    """
+
+    async def _role_checker(
+        current_user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        if current_user.get("role") not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of roles: {', '.join(allowed_roles)}",
+            )
+        return current_user
+
+    return _role_checker

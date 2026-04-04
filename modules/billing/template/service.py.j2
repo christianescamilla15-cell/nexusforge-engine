@@ -1,0 +1,149 @@
+"""Billing service for {{ PROJECT_NAME }}.
+
+Stripe integration for checkout sessions, subscriptions, and webhooks.
+All secrets are loaded from environment variables — never hardcoded.
+"""
+
+import os
+from datetime import datetime
+from typing import Any, Optional
+
+import stripe
+
+from .schemas import SubscriptionStatus
+
+# ---------------------------------------------------------------------------
+# Configuration from environment
+# ---------------------------------------------------------------------------
+stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+WEBHOOK_SECRET: str = os.environ["STRIPE_WEBHOOK_SECRET"]
+
+# In-memory subscription store — replace with your DB adapter
+_subscriptions_db: dict[str, dict[str, Any]] = {}
+
+
+async def create_checkout_session(
+    user_id: str,
+    email: str,
+    price_id: str,
+    success_url: str = "http://localhost:3000/billing/success",
+    cancel_url: str = "http://localhost:3000/billing/cancel",
+) -> dict[str, Any]:
+    """Create a Stripe Checkout session.
+
+    Args:
+        user_id: Internal user ID to attach as metadata.
+        email: Customer email for the Checkout page.
+        price_id: Stripe Price ID for the plan.
+        success_url: Redirect URL on successful payment.
+        cancel_url: Redirect URL if the user cancels.
+
+    Returns:
+        Dict with 'id' (session ID) and 'url' (hosted checkout URL).
+    """
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer_email=email,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"user_id": user_id},
+    )
+    return {"id": session.id, "url": session.url}
+
+
+async def get_subscription_status(user_id: str) -> Optional[SubscriptionStatus]:
+    """Retrieve the subscription status for a user.
+
+    Args:
+        user_id: Internal user ID.
+
+    Returns:
+        SubscriptionStatus if a subscription exists, None for free tier.
+    """
+    sub = _subscriptions_db.get(user_id)
+    if not sub:
+        return None
+    return SubscriptionStatus(**sub)
+
+
+async def handle_stripe_webhook(
+    payload: bytes,
+    sig_header: str,
+) -> dict[str, Any]:
+    """Verify and process a Stripe webhook event.
+
+    Args:
+        payload: Raw request body bytes.
+        sig_header: Stripe-Signature header value.
+
+    Returns:
+        Dict with the event 'type' that was processed.
+
+    Raises:
+        ValueError: If the signature verification fails.
+    """
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError as exc:
+        raise ValueError(f"Invalid webhook signature: {exc}") from exc
+
+    event_type: str = event["type"]
+    data: dict[str, Any] = event["data"]["object"]
+
+    if event_type == "checkout.session.completed":
+        await _handle_checkout_completed(data)
+    elif event_type == "customer.subscription.updated":
+        await _handle_subscription_updated(data)
+    elif event_type == "customer.subscription.deleted":
+        await _handle_subscription_deleted(data)
+    elif event_type == "invoice.payment_failed":
+        await _handle_payment_failed(data)
+
+    return {"type": event_type}
+
+
+# ---------------------------------------------------------------------------
+# Internal webhook handlers
+# ---------------------------------------------------------------------------
+
+async def _handle_checkout_completed(session: dict[str, Any]) -> None:
+    """Process a completed checkout — activate the subscription."""
+    user_id = session.get("metadata", {}).get("user_id")
+    if not user_id:
+        return
+
+    subscription_id = session.get("subscription")
+    _subscriptions_db[user_id] = {
+        "user_id": user_id,
+        "stripe_subscription_id": subscription_id,
+        "plan": "pro",
+        "status": "active",
+        "current_period_start": datetime.utcnow().isoformat(),
+        "current_period_end": None,
+    }
+
+
+async def _handle_subscription_updated(subscription: dict[str, Any]) -> None:
+    """Process a subscription update — sync status."""
+    user_id = subscription.get("metadata", {}).get("user_id")
+    if not user_id or user_id not in _subscriptions_db:
+        return
+
+    _subscriptions_db[user_id]["status"] = subscription.get("status", "active")
+
+
+async def _handle_subscription_deleted(subscription: dict[str, Any]) -> None:
+    """Process a subscription cancellation."""
+    user_id = subscription.get("metadata", {}).get("user_id")
+    if user_id and user_id in _subscriptions_db:
+        _subscriptions_db[user_id]["status"] = "canceled"
+
+
+async def _handle_payment_failed(invoice: dict[str, Any]) -> None:
+    """Handle a failed payment — mark subscription as past_due."""
+    sub_id = invoice.get("subscription")
+    for uid, sub in _subscriptions_db.items():
+        if sub.get("stripe_subscription_id") == sub_id:
+            sub["status"] = "past_due"
+            break
