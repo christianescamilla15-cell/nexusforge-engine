@@ -3,7 +3,7 @@
 
 Reads the project manifest, checks compatibility, resolves dependencies,
 renders module templates, updates main.py / requirements.txt / .env.example,
-and runs quality gates.
+and runs quality gates.  Records telemetry and project memory.
 
 Usage::
 
@@ -18,6 +18,9 @@ Usage::
 
     # Check compatibility without installing
     python cli/add_module.py --project ./my_project --check billing
+
+    # Disable telemetry
+    python cli/add_module.py --project ./my_project --module billing --no-telemetry
 """
 
 import argparse
@@ -37,6 +40,8 @@ from core.compatibility import (
     get_missing_dependencies,
 )
 from core.quality_gate import run_quality_gates
+from core.telemetry import TelemetryCollector, GenerationEvent, Timer
+from core.project_memory import ProjectMemory
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +255,26 @@ def _action_check(project_path: str, module_id: str) -> None:
     print()
 
 
-def _action_add(project_path: str, module_id: str, dry_run: bool = False) -> None:
-    """Add a module to the project."""
+def _action_add(
+    project_path: str,
+    module_id: str,
+    dry_run: bool = False,
+    no_telemetry: bool = False,
+) -> None:
+    """Add a module to the project.
+
+    Args:
+        project_path: Absolute path to the project.
+        module_id: Module ID to add.
+        dry_run: If True, preview changes without writing.
+        no_telemetry: If True, skip telemetry recording.
+    """
+    telemetry_enabled = not no_telemetry
+    telemetry = TelemetryCollector(enabled=telemetry_enabled)
+    timer = Timer()
+    timer.start()
+    errors: list[str] = []
+
     manifest = _load_manifest(project_path)
     installed = _get_installed_module_ids(manifest)
     blueprint_id = _get_blueprint_id(manifest)
@@ -327,8 +350,24 @@ def _action_add(project_path: str, module_id: str, dry_run: bool = False) -> Non
     if qg['failures']:
         for f in qg['failures']:
             print(f"  [FAIL] {f}")
+            errors.append(f)
 
-    print(f"\nModule '{module_id}' added successfully")
+    timer.stop()
+
+    # Record telemetry
+    event = GenerationEvent(
+        event_type="module_added",
+        project_type=blueprint_id,
+        modules=proposed,
+        files_created=result['files_created'],
+        duration_ms=timer.elapsed_ms,
+        quality_gates_passed=qg['passed'],
+        quality_gates_total=qg['total'],
+        errors=errors,
+    )
+    telemetry.record(event)
+
+    print(f"\nModule '{module_id}' added successfully ({timer.elapsed_ms}ms)")
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +410,12 @@ def main() -> None:
         default=False,
         help="Preview what would change without writing",
     )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        default=False,
+        help="Disable telemetry recording",
+    )
     args = parser.parse_args()
 
     project_path = os.path.abspath(args.project)
@@ -392,7 +437,7 @@ def main() -> None:
         print("\nSpecify --module, --list, or --check")
         sys.exit(1)
 
-    _action_add(project_path, args.module, dry_run=args.dry_run)
+    _action_add(project_path, args.module, dry_run=args.dry_run, no_telemetry=args.no_telemetry)
 
 
 if __name__ == "__main__":

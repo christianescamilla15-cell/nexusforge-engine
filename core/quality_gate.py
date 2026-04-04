@@ -1,11 +1,14 @@
-"""Quality Gate -- Validates the generated project structure and contents.
+"""Quality Gate v1.0 -- Validates the generated project structure and contents.
 
-Runs a series of checks against a scaffolded project to verify correctness:
-directory existence, file existence, env coverage, dependency satisfaction,
-compatibility matrix validation, and more.  Returns a detailed report of
-passed/failed checks.
+Runs a series of checks (16 total) against a scaffolded project to verify
+correctness: directory existence, file existence, env coverage, dependency
+satisfaction, compatibility matrix validation, Python syntax validation,
+import resolution, circular dependency detection, and test coverage.
+
+Returns a detailed report of passed/failed checks.
 """
 
+import ast
 import os
 import re
 from typing import Any
@@ -595,6 +598,282 @@ def _check_no_module_conflicts(project_path: str) -> dict[str, Any]:
         }
 
 
+def _check_python_syntax(project_path: str) -> dict[str, Any]:
+    """Validate Python syntax by compiling each .py file.
+
+    Uses ``ast.parse`` to check syntax without executing the files.
+    Catches SyntaxError gracefully and reports all invalid files.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    syntax_errors: list[str] = []
+
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+
+        for filename in files:
+            if not filename.endswith(".py"):
+                continue
+
+            full_path = os.path.join(root, filename)
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    source = f.read()
+                ast.parse(source, filename=full_path)
+            except SyntaxError as exc:
+                rel = os.path.relpath(full_path, project_path)
+                line_info = f" (line {exc.lineno})" if exc.lineno else ""
+                syntax_errors.append(f"{rel}{line_info}: {exc.msg}")
+            except Exception:
+                # Non-syntax errors (encoding, etc.) — skip gracefully
+                pass
+
+    return {
+        "name": "python_syntax_valid",
+        "passed": len(syntax_errors) == 0,
+        "details": (
+            f"Syntax errors found: {syntax_errors}" if syntax_errors
+            else "All Python files have valid syntax"
+        ),
+    }
+
+
+def _check_import_resolution(project_path: str) -> dict[str, Any]:
+    """Verify that imported modules exist within the project.
+
+    Checks ``from src.X.Y import ...`` style imports against the project's
+    directory structure. Only flags internal project imports, not third-party.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    unresolved: list[str] = []
+
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+
+        for filename in files:
+            if not filename.endswith(".py"):
+                continue
+
+            full_path = os.path.join(root, filename)
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    source = f.read()
+
+                tree = ast.parse(source, filename=full_path)
+            except (SyntaxError, Exception):
+                continue
+
+            rel_file = os.path.relpath(full_path, project_path)
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    module_path = node.module
+                    # Only check project-internal imports (starting with src.)
+                    if not module_path.startswith("src."):
+                        continue
+
+                    # Convert module path to filesystem path
+                    parts = module_path.split(".")
+                    # Check if the directory or file exists
+                    dir_candidate = os.path.join(project_path, *parts)
+                    file_candidate = os.path.join(project_path, *parts[:-1], parts[-1] + ".py")
+                    init_candidate = os.path.join(dir_candidate, "__init__.py")
+
+                    if not (
+                        os.path.isdir(dir_candidate)
+                        or os.path.isfile(file_candidate)
+                        or os.path.isfile(init_candidate)
+                    ):
+                        unresolved.append(
+                            f"{rel_file}: import '{module_path}' not found"
+                        )
+
+    return {
+        "name": "import_resolution",
+        "passed": len(unresolved) == 0,
+        "details": (
+            f"Unresolved imports: {unresolved}" if unresolved
+            else "All internal imports resolve correctly"
+        ),
+    }
+
+
+def _check_circular_dependencies(project_path: str) -> dict[str, Any]:
+    """Detect circular import dependencies among project Python files.
+
+    Builds a directed graph of ``from src.X import ...`` relationships
+    and checks for cycles using DFS.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    # Build import graph: module_name -> set of imported module_names
+    graph: dict[str, set[str]] = {}
+
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+
+        for filename in files:
+            if not filename.endswith(".py"):
+                continue
+
+            full_path = os.path.join(root, filename)
+            rel = os.path.relpath(full_path, project_path).replace(os.sep, "/")
+
+            # Convert file path to module name (e.g. src/auth/router.py -> src.auth.router)
+            module_name = rel.replace("/", ".").removesuffix(".py")
+            if module_name.endswith(".__init__"):
+                module_name = module_name.removesuffix(".__init__")
+
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    source = f.read()
+                tree = ast.parse(source, filename=full_path)
+            except (SyntaxError, Exception):
+                continue
+
+            imports: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.startswith("src."):
+                        imports.add(node.module)
+
+            if imports:
+                graph[module_name] = imports
+
+    # DFS cycle detection
+    cycles: list[str] = []
+    visited: set[str] = set()
+    in_stack: set[str] = set()
+
+    def _dfs(node: str, path: list[str]) -> None:
+        if node in in_stack:
+            # Found a cycle
+            cycle_start = path.index(node) if node in path else 0
+            cycle = path[cycle_start:] + [node]
+            cycles.append(" -> ".join(cycle))
+            return
+        if node in visited:
+            return
+
+        visited.add(node)
+        in_stack.add(node)
+        path.append(node)
+
+        for dep in graph.get(node, set()):
+            _dfs(dep, path)
+
+        path.pop()
+        in_stack.discard(node)
+
+    for module_name in graph:
+        if module_name not in visited:
+            _dfs(module_name, [])
+
+    return {
+        "name": "no_circular_dependencies",
+        "passed": len(cycles) == 0,
+        "details": (
+            f"Circular dependencies detected: {cycles}" if cycles
+            else "No circular dependencies found"
+        ),
+    }
+
+
+def _check_test_file_coverage(project_path: str) -> dict[str, Any]:
+    """Check that every module has at least one test file.
+
+    Looks for ``tests/`` or ``test_*.py`` files corresponding to each
+    module directory under ``src/``.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    src_dir = os.path.join(project_path, "src")
+    tests_dir = os.path.join(project_path, "tests")
+
+    if not os.path.isdir(src_dir):
+        return {
+            "name": "test_file_coverage",
+            "passed": True,
+            "details": "No src/ directory found, skipping test coverage check",
+        }
+
+    # Discover module directories (immediate children of src/ that have .py files)
+    module_dirs: list[str] = []
+    for entry in os.listdir(src_dir):
+        entry_path = os.path.join(src_dir, entry)
+        if os.path.isdir(entry_path) and not entry.startswith((".", "__")):
+            py_files = [f for f in os.listdir(entry_path) if f.endswith(".py")]
+            if py_files:
+                module_dirs.append(entry)
+
+    if not module_dirs:
+        return {
+            "name": "test_file_coverage",
+            "passed": True,
+            "details": "No module directories found in src/",
+        }
+
+    # Check for test files
+    uncovered: list[str] = []
+    for mod_name in module_dirs:
+        has_test = False
+
+        # Check tests/test_{mod_name}.py
+        if os.path.isfile(os.path.join(tests_dir, f"test_{mod_name}.py")):
+            has_test = True
+
+        # Check tests/{mod_name}/
+        if os.path.isdir(os.path.join(tests_dir, mod_name)):
+            has_test = True
+
+        # Check src/{mod_name}/tests/ or src/{mod_name}/test_*.py
+        mod_dir = os.path.join(src_dir, mod_name)
+        if os.path.isdir(os.path.join(mod_dir, "tests")):
+            has_test = True
+        for f in os.listdir(mod_dir):
+            if f.startswith("test_") and f.endswith(".py"):
+                has_test = True
+                break
+
+        if not has_test:
+            uncovered.append(mod_name)
+
+    return {
+        "name": "test_file_coverage",
+        "passed": len(uncovered) == 0,
+        "details": (
+            f"Modules without test files: {uncovered}" if uncovered
+            else "All modules have at least one test file"
+        ),
+    }
+
+
 def run_quality_gates(
     project_path: str,
     blueprint: dict[str, Any] | None = None,
@@ -602,7 +881,7 @@ def run_quality_gates(
 ) -> dict[str, Any]:
     """Run all quality gate checks against a generated project.
 
-    Checks performed:
+    Checks performed (16 total):
     1. Required directories exist (from blueprint base_structure).
     2. Required files exist (manifest, requirements.txt, .env.example).
     3. .env.example covers all required env vars.
@@ -615,6 +894,10 @@ def run_quality_gates(
     10. All module env vars are in .env.example.
     11. All module packages are in requirements.txt.
     12. No module conflicts exist.
+    13. Python syntax validation (compile each .py file).
+    14. Import resolution (verify imported modules exist).
+    15. Circular dependency detection.
+    16. Test file coverage (every module has at least one test file).
 
     Args:
         project_path: Absolute path to the project root.
@@ -692,6 +975,18 @@ def run_quality_gates(
 
     # 12. No module conflicts (v0.5)
     checks.append(_check_no_module_conflicts(project_path))
+
+    # 13. Python syntax validation (v1.0)
+    checks.append(_check_python_syntax(project_path))
+
+    # 14. Import resolution (v1.0)
+    checks.append(_check_import_resolution(project_path))
+
+    # 15. Circular dependency detection (v1.0)
+    checks.append(_check_circular_dependencies(project_path))
+
+    # 16. Test file coverage (v1.0)
+    checks.append(_check_test_file_coverage(project_path))
 
     # Summarize
     passed = sum(1 for c in checks if c["passed"])

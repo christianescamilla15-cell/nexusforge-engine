@@ -20,6 +20,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.repair_engine import repair_project, RepairIssue, RepairResult
+from core.telemetry import TelemetryCollector, GenerationEvent, Timer
+from core.project_memory import ProjectMemory
 
 
 _SEVERITY_ICONS = {
@@ -69,6 +71,12 @@ def main() -> None:
         default=False,
         help="Show what would be fixed without writing (requires --fix)",
     )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        default=False,
+        help="Disable telemetry recording",
+    )
     args = parser.parse_args()
 
     project_path = os.path.abspath(args.project)
@@ -77,8 +85,14 @@ def main() -> None:
         print(f"[ERROR] Project not found: {project_path}")
         sys.exit(1)
 
+    telemetry_enabled = not args.no_telemetry
+    telemetry = TelemetryCollector(enabled=telemetry_enabled)
+    memory = ProjectMemory(enabled=telemetry_enabled)
+    timer = Timer()
+    timer.start()
+
     mode = "DRY RUN" if args.fix and args.dry_run else ("AUTO-FIX" if args.fix else "REPORT ONLY")
-    print(f"NexusForge Repair v0.5 -- {mode}")
+    print(f"NexusForge Repair v1.0 -- {mode}")
     print(f"Project: {project_path}")
     print("=" * 60)
 
@@ -111,6 +125,42 @@ def main() -> None:
             _print_fix(fix)
         applied = sum(1 for f in report.fixes if f.applied)
         print(f"\nApplied {applied}/{len(report.fixes)} fixes")
+
+    timer.stop()
+
+    # Record telemetry
+    applied_fixes = sum(1 for f in report.fixes if f.applied) if report.fixes else 0
+    errors = [i.description for i in report.issues if i.severity == "critical"]
+    event = GenerationEvent(
+        event_type="repair_applied",
+        project_type="",
+        modules=[],
+        files_created=applied_fixes,
+        duration_ms=timer.elapsed_ms,
+        quality_gates_passed=0,
+        quality_gates_total=0,
+        errors=errors,
+    )
+    telemetry.record(event)
+
+    # Learn from repair
+    repair_data = {
+        "issues": [
+            {
+                "category": i.category,
+                "description": i.description,
+                "auto_fixable": i.auto_fixable,
+            }
+            for i in report.issues
+        ],
+        "fixes": [
+            {"issue_id": f.issue_id, "applied": f.applied}
+            for f in report.fixes
+        ],
+    }
+    memory.learn_from_repair(repair_data)
+
+    print(f"\nDuration: {timer.elapsed_ms}ms")
 
     # Exit code: 1 if critical issues remain unfixed
     if not args.fix and s.get("critical", 0) > 0:

@@ -13,3 +13,5 @@ output/
 *.log
 .DS_Store
 Thumbs.db
+.aios/
+.kiro/
