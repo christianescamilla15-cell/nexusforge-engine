@@ -1,9 +1,13 @@
 """{{ PROJECT_NAME }} -- AI-powered invoice processing pipeline."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-{% if HAS_AUTH %}from src.auth.router import router as auth_router{% endif %}
+{% if HAS_AUTH %}
+from src.auth.router import router as auth_router
+{% endif %}
 from src.invoices.router import router as invoices_router
-{% if HAS_NOTIFICATIONS %}from src.notifications.router import router as notifications_router{% endif %}
+{% if HAS_NOTIFICATIONS %}
+from src.notifications.router import router as notifications_router
+{% endif %}
 
 app = FastAPI(title="{{ PROJECT_NAME }}", version="0.1.0")
 app.add_middleware(
@@ -13,9 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-{% if HAS_AUTH %}app.include_router(auth_router, prefix="/api/auth", tags=["auth"]){% endif %}
+{% if HAS_AUTH %}
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+{% endif %}
 app.include_router(invoices_router, prefix="/api/invoices", tags=["invoices"])
-{% if HAS_NOTIFICATIONS %}app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"]){% endif %}
+{% if HAS_NOTIFICATIONS %}
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+{% endif %}
 
 
 @app.get("/api/health")

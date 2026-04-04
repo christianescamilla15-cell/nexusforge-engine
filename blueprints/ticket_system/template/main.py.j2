@@ -1,9 +1,13 @@
 """{{ PROJECT_NAME }} -- AI-powered ticket triage system."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-{% if HAS_AUTH %}from src.auth.router import router as auth_router{% endif %}
+{% if HAS_AUTH %}
+from src.auth.router import router as auth_router
+{% endif %}
 from src.tickets.router import router as tickets_router
-{% if HAS_NOTIFICATIONS %}from src.notifications.router import router as notifications_router{% endif %}
+{% if HAS_NOTIFICATIONS %}
+from src.notifications.router import router as notifications_router
+{% endif %}
 
 app = FastAPI(title="{{ PROJECT_NAME }}", version="0.1.0")
 app.add_middleware(

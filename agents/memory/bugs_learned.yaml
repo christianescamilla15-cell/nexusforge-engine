@@ -212,3 +212,34 @@ bugs:
     fix: "Wrap in try/catch"
     preventing_agents: [sentinel, runtime_prober]
     rule: "ALWAYS wrap JSON.parse in try/catch. External data is never guaranteed to be valid JSON."
+
+  # ENGINE v2.0 — Template Generation Bugs
+  - id: BUG-021
+    title: "Jinja2 inline conditionals concatenate lines without newline"
+    severity: critical
+    category: template_engine
+    file: "blueprints/*/template/main.py.j2"
+    description: "{% if X %}import Y{% endif %} on same line as next import causes 'from Afrom B' concatenation when rendered"
+    fix: "Always put {% if %} and {% endif %} on separate lines with the content between them"
+    preventing_agents: [sentinel, contract_validator, standards_enforcer]
+    rule: "NEVER use inline Jinja2 conditionals for Python imports. Always use multi-line: {% if X %}\nimport Y\n{% endif %}"
+
+  - id: BUG-022
+    title: "Generated projects have no test files for modules"
+    severity: medium
+    category: template_engine
+    file: "modules/*/template/ — no test files"
+    description: "Every module template generates source files but no test files. test_file_coverage gate always fails."
+    fix: "Add test_*.py.j2 templates to each module"
+    preventing_agents: [sentinel, test_forge]
+    rule: "EVERY module template MUST include at least one test file template."
+
+  - id: BUG-023
+    title: "Intent router confidence always very low (7-34%)"
+    severity: low
+    category: intent_router
+    file: "core/intent_router.py"
+    description: "TF-IDF scoring produces very low confidence scores. Every prompt triggers LOW CONFIDENCE warning."
+    fix: "Tune sigmoid normalization parameters or adjust keyword weights"
+    preventing_agents: [architect, intent_parser]
+    rule: "Intent router confidence thresholds should be calibrated against a test set of real prompts."
