@@ -243,3 +243,13 @@ bugs:
     fix: "Tune sigmoid normalization parameters or adjust keyword weights"
     preventing_agents: [architect, intent_parser]
     rule: "Intent router confidence thresholds should be calibrated against a test set of real prompts."
+
+  - id: BUG-024
+    title: "INSERT into table with column that doesn't exist (user_id in workflows)"
+    severity: critical
+    category: schema
+    file: "backend/app/routes/templates.py:129"
+    description: "INSERT INTO workflows (..., user_id) but workflows table has no user_id column"
+    fix: "Always verify INSERT columns match the actual table schema from migrations"
+    preventing_agents: [sentinel, schema_designer, contract_validator, field_mapper]
+    rule: "BEFORE writing any INSERT query, read the CREATE TABLE migration to verify all columns exist."
