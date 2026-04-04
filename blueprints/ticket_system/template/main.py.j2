@@ -17,9 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-{% if HAS_AUTH %}app.include_router(auth_router, prefix="/api/auth", tags=["auth"]){% endif %}
+{% if HAS_AUTH %}
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+{% endif %}
 app.include_router(tickets_router, prefix="/api/tickets", tags=["tickets"])
-{% if HAS_NOTIFICATIONS %}app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"]){% endif %}
+{% if HAS_NOTIFICATIONS %}
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+{% endif %}
 
 
 @app.get("/api/health")
