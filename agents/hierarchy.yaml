@@ -1,0 +1,327 @@
+# =============================================================================
+# NexusForge Engine 2.0 — Complete Agent Hierarchy
+# =============================================================================
+# Designed from real bugs and failures encountered during NexusForge 1.0:
+#   - 307 redirect (POST body lost on trailing slash mismatch)
+#   - Redis timeout (60s per step, silent crash when unavailable)
+#   - Stale state / lost context between sessions
+#   - Silent failures (asyncio.create_task swallows exceptions)
+#   - Trailing slash inconsistencies across API endpoints
+#   - JWT 26-byte key (below HMAC-SHA256 minimum)
+#   - Demo mode code not fully removed before production deploy
+#   - Zombie runs stuck in pending/running with no completed_at
+#   - Field name mismatches between backend StepExecutionResponse and frontend
+#   - safe_publish() gaps where direct redis.publish() calls bypassed the guard
+# =============================================================================
+
+version: "2.0"
+engine: nexusforge-engine
+total_agents: 24
+
+# ---------------------------------------------------------------------------
+# LEVEL 0 — ORCHESTRATOR (1)
+# ---------------------------------------------------------------------------
+orchestrator:
+  name: Nexus
+  file: orchestrator.yaml
+  description: >
+    Global supervisor that persists across ALL sessions. Knows every project
+    generated, every failure encountered, every blueprint available.
+    Routes incoming requests to the correct Super Agent, enforces global
+    quality gates, and maintains the cross-session knowledge graph.
+
+# ---------------------------------------------------------------------------
+# LEVEL 1 — SUPER AGENTS (4)
+# ---------------------------------------------------------------------------
+super_agents:
+  - name: Architect
+    file: super/architect.yaml
+    domain: architecture
+    description: >
+      Owns blueprint selection, module composition, dependency resolution,
+      and the full project spec. Prevents the structural mistakes that
+      caused NexusForge 1.0's tangled coupling between engine, agents,
+      and infrastructure.
+    subordinates:
+      - IntentParser
+      - BlueprintComposer
+      - DependencyResolver
+      - SchemaDesigner
+
+  - name: Sentinel
+    file: super/sentinel.yaml
+    domain: quality
+    description: >
+      Owns all validation — API contracts, security audits, code standards,
+      and technical debt detection. Every artifact passes through Sentinel
+      before being written to disk. Born from NexusForge 1.0's silent
+      failures, trailing slash bugs, and JWT key weakness.
+    subordinates:
+      - ContractValidator
+      - SecurityAuditor
+      - StandardsEnforcer
+      - DebtDetector
+      - TestForge
+
+  - name: Foundry
+    file: super/foundry.yaml
+    domain: ops
+    description: >
+      Owns infrastructure scaffolding, deployment configs, runtime
+      validation, and environment assumptions. Prevents the Redis timeout
+      and connection bugs that silently killed NexusForge 1.0 workflows.
+    subordinates:
+      - InfraScaffolder
+      - EnvValidator
+      - RuntimeProber
+      - DeployConfigurer
+
+  - name: Chronicle
+    file: super/chronicle.yaml
+    domain: memory
+    description: >
+      Owns the 3-tier memory system — working, episodic, semantic.
+      Prevents the stale state and lost context that plagued NexusForge
+      1.0 sessions. Manages knowledge transfer between agents and
+      cross-session persistence.
+    subordinates:
+      - ContextKeeper
+      - PatternRecorder
+
+# ---------------------------------------------------------------------------
+# LEVEL 2 — AGENTS (14)
+# ---------------------------------------------------------------------------
+agents:
+  # --- Architecture Domain (reports to Architect) ---
+  - name: IntentParser
+    file: domain/intent_parser.yaml
+    domain: architecture
+    supervisor: Architect
+    description: >
+      Parses natural language project descriptions into structured intents
+      with project_type, complexity, modules, and constraints.
+
+  - name: BlueprintComposer
+    file: domain/blueprint_composer.yaml
+    domain: architecture
+    supervisor: Architect
+    description: >
+      Selects and composes blueprints from the registry, merging base
+      templates with module overlays into a complete project spec.
+
+  - name: DependencyResolver
+    file: domain/dependency_resolver.yaml
+    domain: architecture
+    supervisor: Architect
+    description: >
+      Resolves module dependencies, detects conflicts, and produces a
+      topologically sorted install order. Prevents circular deps
+      and version mismatches.
+
+  - name: SchemaDesigner
+    file: domain/schema_designer.yaml
+    domain: architecture
+    supervisor: Architect
+    description: >
+      Generates database schemas, API contracts, and data models from
+      the project spec. Ensures field names are consistent end-to-end
+      (backend response -> frontend consumption).
+
+  # --- Quality Domain (reports to Sentinel) ---
+  - name: ContractValidator
+    file: domain/contract_validator.yaml
+    domain: quality
+    supervisor: Sentinel
+    description: >
+      Validates every API endpoint against its contract — HTTP methods,
+      URL patterns, request/response schemas, status codes, and redirect
+      behavior. The agent that would have caught the 307 redirect bug.
+
+  - name: SecurityAuditor
+    file: domain/security_auditor.yaml
+    domain: quality
+    supervisor: Sentinel
+    description: >
+      Audits generated code for security vulnerabilities — weak keys,
+      hardcoded secrets, missing auth middleware, CORS misconfig.
+      Would have caught the JWT 26-byte key.
+
+  - name: StandardsEnforcer
+    file: domain/standards_enforcer.yaml
+    domain: quality
+    supervisor: Sentinel
+    description: >
+      Enforces coding standards — trailing slashes, naming conventions,
+      import ordering, file structure, and language consistency
+      (English code / Spanish UI).
+
+  - name: DebtDetector
+    file: domain/debt_detector.yaml
+    domain: quality
+    supervisor: Sentinel
+    description: >
+      Scans for technical debt — demo mode remnants, TODO comments,
+      dead code, unused imports, mock data left in production paths.
+      Would have caught demo mode code not fully removed.
+
+  - name: TestForge
+    file: domain/test_forge.yaml
+    domain: quality
+    supervisor: Sentinel
+    description: >
+      Generates test suites for every module — unit, integration,
+      and property-based tests. Produces the test scaffolding that
+      NexusForge 1.0 lacked for its Redis-down and field-mapping bugs.
+
+  # --- Ops Domain (reports to Foundry) ---
+  - name: InfraScaffolder
+    file: domain/infra_scaffolder.yaml
+    domain: ops
+    supervisor: Foundry
+    description: >
+      Generates Docker Compose files, Render configs, Vercel configs,
+      and CI/CD pipelines. Sets correct timeouts, health checks,
+      and resource limits.
+
+  - name: EnvValidator
+    file: domain/env_validator.yaml
+    domain: ops
+    supervisor: Foundry
+    description: >
+      Validates that every env var referenced in code has a corresponding
+      entry in .env.example, that no secrets are hardcoded, and that
+      deployment platforms have all required vars configured.
+
+  - name: RuntimeProber
+    file: domain/runtime_prober.yaml
+    domain: ops
+    supervisor: Foundry
+    description: >
+      Generates graceful degradation code for external dependencies.
+      Tests what happens when Redis is down, DB is slow, LLM provider
+      is unavailable. Would have caught the Redis silent crash.
+
+  - name: DeployConfigurer
+    file: domain/deploy_configurer.yaml
+    domain: ops
+    supervisor: Foundry
+    description: >
+      Generates deployment manifests — render.yaml, vercel.json,
+      Dockerfile — with correct ports, build commands, health check
+      paths, and timeout settings.
+
+  # --- Memory Domain (reports to Chronicle) ---
+  - name: ContextKeeper
+    file: domain/context_keeper.yaml
+    domain: memory
+    supervisor: Chronicle
+    description: >
+      Manages working memory and session context. Ensures no agent
+      operates on stale state. Implements the context window that
+      NexusForge 1.0 lacked between execution sessions.
+
+  - name: PatternRecorder
+    file: domain/pattern_recorder.yaml
+    domain: memory
+    supervisor: Chronicle
+    description: >
+      Records success/failure patterns into episodic memory and
+      distills them into semantic knowledge. Feeds the learning
+      loop that makes each generated project better than the last.
+
+# ---------------------------------------------------------------------------
+# LEVEL 3 — SUB-AGENTS (spawned on demand)
+# ---------------------------------------------------------------------------
+sub_agents:
+  - name: FileWriter
+    spawned_by: [BlueprintComposer, InfraScaffolder, TestForge]
+    description: Writes individual files to disk with content validation.
+
+  - name: DiffChecker
+    spawned_by: [ContractValidator, StandardsEnforcer]
+    description: Compares generated output against reference contracts.
+
+  - name: SecretScanner
+    spawned_by: [SecurityAuditor, EnvValidator]
+    description: Scans file contents for hardcoded keys, tokens, passwords.
+
+  - name: TrailingSlashFixer
+    spawned_by: [StandardsEnforcer, ContractValidator]
+    description: Normalizes URL patterns to prevent 307 redirect bugs.
+
+  - name: ZombieDetector
+    spawned_by: [RuntimeProber, DebtDetector]
+    description: >
+      Identifies code paths that can leave resources in limbo state
+      (pending runs, open connections, unreleased locks).
+
+  - name: FieldMapper
+    spawned_by: [SchemaDesigner, ContractValidator]
+    description: >
+      Traces field names from database column through backend response
+      to frontend consumption — catches the step_name/name mismatch class.
+
+# ---------------------------------------------------------------------------
+# Communication Topology
+# ---------------------------------------------------------------------------
+communication:
+  protocol: message_bus
+  patterns:
+    - name: top_down_delegation
+      flow: Nexus -> Super Agent -> Agent -> Sub-Agent
+      description: Task decomposition and delegation
+
+    - name: bottom_up_reporting
+      flow: Sub-Agent -> Agent -> Super Agent -> Nexus
+      description: Results, quality gate outcomes, failure alerts
+
+    - name: peer_consultation
+      flow: Agent <-> Agent (same Super)
+      description: >
+        Agents under the same Super Agent can consult each other.
+        Example: SchemaDesigner asks ContractValidator to pre-check
+        a generated API contract before committing it.
+
+    - name: cross_domain_escalation
+      flow: Super Agent -> Nexus -> Super Agent
+      description: >
+        When a Quality issue requires an Architecture change,
+        Sentinel escalates to Nexus who delegates to Architect.
+
+    - name: memory_broadcast
+      flow: Chronicle -> ALL
+      description: >
+        Chronicle broadcasts relevant episodic/semantic memories
+        to any agent starting a task, so context is never lost.
+
+# ---------------------------------------------------------------------------
+# Global Quality Gates
+# ---------------------------------------------------------------------------
+global_quality_gates:
+  pre_generation:
+    - intent_parsed_and_validated
+    - blueprint_exists_for_type
+    - all_module_dependencies_resolved
+    - no_circular_dependencies
+
+  post_generation:
+    - all_required_directories_exist
+    - all_required_files_exist
+    - no_hardcoded_secrets
+    - all_env_vars_documented
+    - all_api_endpoints_match_contract
+    - no_trailing_slash_inconsistencies
+    - no_demo_mode_remnants
+    - security_audit_passed
+    - all_external_deps_have_graceful_fallback
+    - test_suite_generated_and_passing
+    - field_names_consistent_backend_to_frontend
+
+  deployment_readiness:
+    - docker_compose_valid
+    - render_yaml_valid
+    - vercel_json_valid
+    - health_endpoint_responds
+    - redis_optional_graceful_degradation_verified
+    - jwt_key_minimum_256_bits
+    - no_zombie_state_paths

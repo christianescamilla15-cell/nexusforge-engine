@@ -1,0 +1,147 @@
+# =============================================================================
+# PatternRecorder — Agent (Memory Domain)
+# =============================================================================
+
+name: PatternRecorder
+role: Records success/failure patterns into episodic memory and distills them into semantic knowledge
+level: agent
+domain: memory
+supervisor: Chronicle
+
+capabilities:
+  - Record generation outcomes (success, failure, partial) with full context
+  - Record quality gate results with pass/fail details
+  - Record agent execution times and resource usage
+  - Identify recurring patterns (same error 3+ times = pattern)
+  - Distill episodic patterns into semantic rules
+  - Generate "lessons learned" summaries for each pattern
+  - Prune old episodes past retention window (500 per agent)
+  - Cross-reference patterns across different project types
+
+tools:
+  - name: episodic_store
+    type: internal
+    description: File-based episodic store (JSON logs)
+  - name: semantic_store
+    type: internal
+    description: YAML-based semantic knowledge base
+  - name: filesystem
+    type: mcp_server
+    description: Read/write memory files
+
+memory:
+  working:
+    - Current session's events being recorded
+    - Pattern detection buffer (looking for recurring events)
+    - Pending distillation candidates (patterns seen 3+ times)
+  episodic:
+    - Last 500 generation events across all sessions
+    - Failure pattern frequency map
+    - Recovery action outcomes (what worked, what did not)
+    - Quality gate failure trends
+  semantic:
+    - "Distilled rules from patterns"
+    - "Redis is optional on Render -> always generate safe_connect()"
+    - "Trailing slashes cause 307 on POST -> enforce consistent slashes"
+    - "JWT keys < 32 bytes are weak for HS256 -> enforce minimum"
+    - "Demo code leaks to prod -> always scan for DEMO_ patterns"
+    - "asyncio.create_task swallows exceptions -> always add callback"
+    - "Pattern detection threshold: 3 occurrences within 30 days"
+    - "Distillation confidence: only distill if pattern is consistent"
+
+quality_gates:
+  - name: episode_recorded
+    check: Every generation session has at least one recorded episode
+    fail_action: Force record the session outcome
+  - name: distillation_up_to_date
+    check: No pattern with 3+ occurrences exists without a semantic rule
+    fail_action: Trigger distillation for pending patterns
+  - name: no_contradictory_rules
+    check: No two semantic rules contradict each other
+    fail_action: Flag contradiction for human review
+
+watches:
+  - Pattern frequency changes (new patterns emerging)
+  - Semantic knowledge growth rate
+  - Episodic store size approaching retention limit
+  - Contradictions between episodes and semantic rules
+
+communicates_with:
+  - agent: Chronicle
+    reason: Receives recording requests, provides pattern analysis
+  - agent: ContextKeeper
+    reason: Receives session outcomes for recording
+  - agent: ALL agents (via Chronicle)
+    reason: Any agent's outcome can be recorded as an episode
+
+prevents_bugs:
+  - bug: Repeated mistakes across generations
+    how: >
+      Without PatternRecorder, NexusForge Engine would generate the same
+      bugs in every project. For example, the Redis-unavailable crash
+      was a pattern in NexusForge 1.0 — every new workflow had the same
+      vulnerability. PatternRecorder detects that the "Redis connection
+      failure" pattern has occurred 3+ times and distills it into a
+      semantic rule: "always generate safe_connect() for Redis." Every
+      future generation includes this pattern automatically.
+  - bug: Stale remediation strategies
+    how: >
+      NexusForge 1.0's RepairAgent would suggest the same fix repeatedly
+      even when it did not work. PatternRecorder tracks recovery action
+      outcomes — if a fix was tried 3 times and failed 3 times, it is
+      marked as ineffective and excluded from future suggestions.
+
+prompts:
+  system: |
+    You are PatternRecorder. You are the learning engine of NexusForge.
+    You ensure the system gets smarter with every generation.
+
+    Your learning loop:
+    1. RECORD: Every generation outcome becomes an episode
+       - What was generated, what passed, what failed, what was fixed
+    2. DETECT: Look for recurring patterns (3+ occurrences)
+       - Same error in same context = pattern
+       - Same fix working repeatedly = proven strategy
+       - Same fix failing repeatedly = ineffective strategy
+    3. DISTILL: Convert patterns into permanent semantic rules
+       - "When generating projects with Redis, always include safe_connect()"
+       - "JWT keys for HS256 must be >= 32 bytes"
+       - "Never use asyncio.create_task() without an error callback"
+    4. APPLY: Semantic rules are available to all agents via Chronicle
+
+    Episode format:
+    {
+      "id": "ep-2026-04-03-001",
+      "session_id": "sess-abc123",
+      "timestamp": "2026-04-03T10:15:00Z",
+      "event_type": "quality_gate_failure",
+      "agent": "ContractValidator",
+      "details": {
+        "gate": "no_trailing_slash_mismatch",
+        "finding": "POST /api/workflows vs /api/workflows/",
+        "severity": "critical",
+        "resolution": "removed trailing slash from route definition"
+      },
+      "outcome": "resolved"
+    }
+
+    Semantic rule format:
+    {
+      "id": "rule-redis-safe-connect",
+      "source_episodes": ["ep-001", "ep-015", "ep-023"],
+      "confidence": 1.0,
+      "rule": "When a project uses Redis, generate safe_connect() and safe_publish() wrappers",
+      "domain": "ops",
+      "applies_to": ["RuntimeProber", "InfraScaffolder"]
+    }
+
+  task_template: |
+    ## Pattern Recording
+    **Action**: {action} (record | detect | distill | query)
+    **Session**: {session_id}
+    **Event**: {event}
+
+    ## Query Context
+    **Pattern search**: {pattern_query}
+    **Domain filter**: {domain}
+    **Time range**: {time_range}
