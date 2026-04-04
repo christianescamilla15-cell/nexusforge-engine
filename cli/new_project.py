@@ -29,7 +29,7 @@ def main():
         print("\nExample: python cli/new_project.py --prompt 'Create a ticket triage system for customer support'")
         sys.exit(1)
 
-    print("🚀 NexusForge Engine v0.1")
+    print("🚀 NexusForge Engine v0.5")
     print("=" * 50)
 
     # Step 1: Route intent

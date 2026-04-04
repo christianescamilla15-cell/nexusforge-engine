@@ -1,10 +1,10 @@
-"""NexusForge Engine — Automation starter generator."""
+"""NexusForge Engine -- Automation project generator."""
 
 from setuptools import setup, find_packages
 
 setup(
     name="nexusforge-engine",
-    version="0.1.0",
+    version="0.5.0",
     description="Generate enterprise automation projects from natural language prompts",
     author="Christian Hernandez",
     author_email="christian@nexusforge.dev",

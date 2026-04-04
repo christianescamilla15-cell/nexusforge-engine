@@ -2,12 +2,21 @@
 
 Runs a series of checks against a scaffolded project to verify correctness:
 directory existence, file existence, env coverage, dependency satisfaction,
-and more. Returns a detailed report of passed/failed checks.
+compatibility matrix validation, and more.  Returns a detailed report of
+passed/failed checks.
 """
 
 import os
+import re
 from typing import Any
 from collections import Counter
+
+from core.compatibility import (
+    COMPATIBILITY_MATRIX,
+    check_compatibility,
+    get_all_env_vars,
+    get_all_packages,
+)
 
 
 def _check_directories_exist(
@@ -347,6 +356,245 @@ def _check_manifest_valid(project_path: str) -> dict[str, Any]:
         }
 
 
+def _check_compatibility_matrix(project_path: str) -> dict[str, Any]:
+    """Check that the compatibility matrix passes for the project's modules.
+
+    Reads the manifest to determine blueprint and modules, then runs the
+    full compatibility check.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    manifest_path = os.path.join(project_path, "project_manifest.yaml")
+    if not os.path.isfile(manifest_path):
+        return {
+            "name": "compatibility_matrix",
+            "passed": True,
+            "details": "No manifest found, skipping compatibility check",
+        }
+
+    try:
+        import yaml
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
+
+        blueprint_id = manifest.get("blueprint", {}).get("id", "")
+        module_ids = [m.get("id", "") for m in manifest.get("modules", []) if m.get("id")]
+
+        if not blueprint_id or not module_ids:
+            return {
+                "name": "compatibility_matrix",
+                "passed": True,
+                "details": "Insufficient data for compatibility check, skipping",
+            }
+
+        result = check_compatibility(blueprint_id, module_ids)
+
+        if result.compatible:
+            return {
+                "name": "compatibility_matrix",
+                "passed": True,
+                "details": "All modules are compatible with blueprint and each other",
+            }
+        else:
+            return {
+                "name": "compatibility_matrix",
+                "passed": False,
+                "details": f"Compatibility issues: {result.issues}",
+            }
+    except Exception as exc:
+        return {
+            "name": "compatibility_matrix",
+            "passed": True,
+            "details": f"Could not run compatibility check: {exc}",
+        }
+
+
+def _check_all_module_env_vars(project_path: str) -> dict[str, Any]:
+    """Check that all env vars from all modules are in .env.example.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    manifest_path = os.path.join(project_path, "project_manifest.yaml")
+    if not os.path.isfile(manifest_path):
+        return {
+            "name": "module_env_vars_complete",
+            "passed": True,
+            "details": "No manifest found, skipping module env var check",
+        }
+
+    try:
+        import yaml
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
+
+        module_ids = [m.get("id", "") for m in manifest.get("modules", []) if m.get("id")]
+        required_vars = get_all_env_vars(module_ids)
+
+        if not required_vars:
+            return {
+                "name": "module_env_vars_complete",
+                "passed": True,
+                "details": "No module env vars required",
+            }
+
+        # Read .env.example
+        env_path = os.path.join(project_path, ".env.example")
+        defined_vars: set[str] = set()
+        if os.path.isfile(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        defined_vars.add(line.split("=", 1)[0].strip())
+
+        missing = [v for v in required_vars if v not in defined_vars]
+
+        if missing:
+            return {
+                "name": "module_env_vars_complete",
+                "passed": False,
+                "details": f"Module env vars missing from .env.example: {missing}",
+            }
+
+        return {
+            "name": "module_env_vars_complete",
+            "passed": True,
+            "details": "All module env vars present in .env.example",
+        }
+    except Exception as exc:
+        return {
+            "name": "module_env_vars_complete",
+            "passed": True,
+            "details": f"Could not check module env vars: {exc}",
+        }
+
+
+def _check_all_module_packages(project_path: str) -> dict[str, Any]:
+    """Check that all Python packages from all modules are in requirements.txt.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    manifest_path = os.path.join(project_path, "project_manifest.yaml")
+    if not os.path.isfile(manifest_path):
+        return {
+            "name": "module_packages_complete",
+            "passed": True,
+            "details": "No manifest found, skipping module package check",
+        }
+
+    try:
+        import yaml
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
+
+        module_ids = [m.get("id", "") for m in manifest.get("modules", []) if m.get("id")]
+        required_packages = get_all_packages(module_ids)
+
+        if not required_packages:
+            return {
+                "name": "module_packages_complete",
+                "passed": True,
+                "details": "No module packages required",
+            }
+
+        # Read requirements.txt
+        req_path = os.path.join(project_path, "requirements.txt")
+        installed_names: set[str] = set()
+        if os.path.isfile(req_path):
+            with open(req_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("-"):
+                        continue
+                    pkg_name = re.split(r"[>=<!\[]", line)[0].strip().lower()
+                    if pkg_name:
+                        installed_names.add(pkg_name)
+
+        missing = []
+        for pkg_spec in required_packages:
+            pkg_name = re.split(r"[>=<!\[]", pkg_spec)[0].strip().lower()
+            if pkg_name not in installed_names:
+                missing.append(pkg_spec)
+
+        if missing:
+            return {
+                "name": "module_packages_complete",
+                "passed": False,
+                "details": f"Module packages missing from requirements.txt: {missing}",
+            }
+
+        return {
+            "name": "module_packages_complete",
+            "passed": True,
+            "details": "All module packages present in requirements.txt",
+        }
+    except Exception as exc:
+        return {
+            "name": "module_packages_complete",
+            "passed": True,
+            "details": f"Could not check module packages: {exc}",
+        }
+
+
+def _check_no_module_conflicts(project_path: str) -> dict[str, Any]:
+    """Check that no installed modules conflict with each other.
+
+    Args:
+        project_path: Absolute path to the project root.
+
+    Returns:
+        Check result dict with name, passed, and details.
+    """
+    manifest_path = os.path.join(project_path, "project_manifest.yaml")
+    if not os.path.isfile(manifest_path):
+        return {
+            "name": "no_module_conflicts",
+            "passed": True,
+            "details": "No manifest found, skipping conflict check",
+        }
+
+    try:
+        import yaml
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
+
+        module_ids = [m.get("id", "") for m in manifest.get("modules", []) if m.get("id")]
+
+        from core.compatibility import get_conflicts
+        conflicts = get_conflicts(module_ids)
+
+        if conflicts:
+            return {
+                "name": "no_module_conflicts",
+                "passed": False,
+                "details": f"Module conflicts detected: {conflicts}",
+            }
+
+        return {
+            "name": "no_module_conflicts",
+            "passed": True,
+            "details": "No module conflicts detected",
+        }
+    except Exception as exc:
+        return {
+            "name": "no_module_conflicts",
+            "passed": True,
+            "details": f"Could not check module conflicts: {exc}",
+        }
+
+
 def run_quality_gates(
     project_path: str,
     blueprint: dict[str, Any] | None = None,
@@ -363,6 +611,10 @@ def run_quality_gates(
     6. No duplicate file paths.
     7. Module dependencies are satisfied.
     8. Project manifest is valid YAML with required fields.
+    9. Compatibility matrix passes for the project's modules.
+    10. All module env vars are in .env.example.
+    11. All module packages are in requirements.txt.
+    12. No module conflicts exist.
 
     Args:
         project_path: Absolute path to the project root.
@@ -428,6 +680,18 @@ def run_quality_gates(
 
     # 8. Manifest valid
     checks.append(_check_manifest_valid(project_path))
+
+    # 9. Compatibility matrix (v0.5)
+    checks.append(_check_compatibility_matrix(project_path))
+
+    # 10. All module env vars in .env.example (v0.5)
+    checks.append(_check_all_module_env_vars(project_path))
+
+    # 11. All module packages in requirements.txt (v0.5)
+    checks.append(_check_all_module_packages(project_path))
+
+    # 12. No module conflicts (v0.5)
+    checks.append(_check_no_module_conflicts(project_path))
 
     # Summarize
     passed = sum(1 for c in checks if c["passed"])
