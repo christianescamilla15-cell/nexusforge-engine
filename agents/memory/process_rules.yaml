@@ -1,0 +1,55 @@
+# Process Rules — Mandatory workflow after every implementation
+# These rules are PERMANENT and apply to ALL future work
+
+rules:
+  - id: RULE-001
+    title: "Mandatory test cycle after every wave/major implementation"
+    description: |
+      After EVERY wave, phase, or major feature implementation:
+      1. Build frontend (npx vite build) — verify 0 errors
+      2. Deploy to Vercel (npx vercel --prod)
+      3. Push backend to GitHub (git push)
+      4. Wait for Manual Deploy on Render (user confirms)
+      5. Run intensive test (API endpoints + frontend integration + code quality)
+      6. If bugs found:
+         a. Fix ALL bugs
+         b. Add each bug to agents/memory/bugs_learned.yaml
+         c. Re-test until 0 bugs
+      7. Only then proceed to next wave/phase
+    enforced_by: [nexus_orchestrator]
+    applies_to: [all_implementations]
+
+  - id: RULE-002
+    title: "Triple test on security-critical changes"
+    description: |
+      When changing auth, passwords, JWT, CORS, SQL queries, or file uploads:
+      1. Test Pass 1: API contract validation (all endpoints)
+      2. Test Pass 2: Frontend-backend integration (fetchAPI calls)
+      3. Test Pass 3: Code quality + security audit
+      Each pass runs as a separate agent for thoroughness.
+    enforced_by: [sentinel]
+    applies_to: [security_changes]
+
+  - id: RULE-003
+    title: "Bug memory feedback loop"
+    description: |
+      Every bug found MUST be:
+      1. Fixed immediately
+      2. Added to agents/memory/bugs_learned.yaml with:
+         - id, title, severity, category, file, description, fix
+         - preventing_agents (which agents should catch this)
+         - rule (what rule prevents this in the future)
+      3. The preventing agent's YAML updated if needed
+    enforced_by: [nexus_orchestrator, chronicle]
+    applies_to: [all_bugs]
+
+  - id: RULE-004
+    title: "Deploy verification required"
+    description: |
+      After pushing to GitHub:
+      - Frontend: verify Vercel deployed (check JS hash matches)
+      - Backend: wait for user to confirm Manual Deploy on Render
+      - Run health check (GET /api/health) to confirm backend is live
+      - Only then run endpoint tests
+    enforced_by: [foundry, deploy_configurer]
+    applies_to: [all_deploys]
