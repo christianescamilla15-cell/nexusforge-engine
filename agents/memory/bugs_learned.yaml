@@ -1,0 +1,143 @@
+# Bugs Learned from NexusForge 1.0 Triple Test (2026-04-03)
+# This file feeds the episodic memory of all agents
+# Each bug is mapped to the agent(s) that should prevent it
+
+bugs:
+  # CRITICAL — Security
+  - id: BUG-001
+    title: "SHA-256 passwords without salt"
+    severity: critical
+    category: security
+    file: "backend/app/auth/routes.py"
+    description: "_hash_password uses bare hashlib.sha256() with no salt. Vulnerable to rainbow tables."
+    fix: "Replace with bcrypt.hashpw() or argon2"
+    preventing_agents: [sentinel, security_auditor]
+    rule: "NEVER use SHA-256/MD5 for password hashing. Always use bcrypt, argon2, or scrypt with salt."
+
+  - id: BUG-002
+    title: "JWT secret hardcoded and only 26 bytes"
+    severity: critical
+    category: security
+    file: "backend/app/config.py:22, backend/app/auth/jwt_handler.py:6"
+    description: "JWT secret defaults to 'nexusforge-dev-secret-2026' (26 bytes, predictable). Anyone reading source can forge tokens."
+    fix: "Require JWT_SECRET from env var, minimum 32 bytes, no fallback"
+    preventing_agents: [sentinel, security_auditor, secret_scanner]
+    rule: "NEVER hardcode JWT secrets. Always require from environment. Minimum 32 bytes for HS256."
+
+  - id: BUG-003
+    title: "Database credentials hardcoded in config default"
+    severity: critical
+    category: security
+    file: "backend/app/config.py:5"
+    description: "Default DATABASE_URL contains postgresql://nexus:nexus_dev_2026@postgres:5432/nexusforge"
+    fix: "Empty default, fail at startup if not set"
+    preventing_agents: [sentinel, secret_scanner, env_validator]
+    rule: "NEVER put credentials in source code defaults. Use empty string + startup validation."
+
+  # HIGH — Auth Missing
+  - id: BUG-004
+    title: "Auth middleware allows anonymous access to all routes"
+    severity: high
+    category: security
+    file: "backend/app/auth/middleware.py:52-57"
+    description: "When no token, middleware sets user=None and passes through. All write endpoints accessible anonymously."
+    fix: "Add _get_user_id() auth check to every POST/PUT/DELETE endpoint"
+    preventing_agents: [sentinel, contract_validator]
+    rule: "Every mutating endpoint (POST/PUT/DELETE) MUST have explicit auth check. GET list endpoints can be public."
+
+  - id: BUG-005
+    title: "Connector config returns credentials in plaintext"
+    severity: high
+    category: security
+    file: "backend/app/routes/connectors.py:79-99"
+    description: "list_connectors returns full config dict including passwords, API keys, auth tokens"
+    fix: "Mask sensitive fields before returning (password, key, secret, token → ••••••••)"
+    preventing_agents: [sentinel, security_auditor]
+    rule: "NEVER return credentials in API responses. Always mask sensitive fields."
+
+  - id: BUG-006
+    title: "SQL injection in PostgreSQL connector"
+    severity: high
+    category: security
+    file: "backend/app/connectors/postgres_ext.py:83"
+    description: "Schema and table names from user input used directly in f-string SQL"
+    fix: "Validate names with regex ^[a-zA-Z_][a-zA-Z0-9_]*$, block semicolons, use read-only transactions"
+    preventing_agents: [sentinel, security_auditor, contract_validator]
+    rule: "NEVER interpolate user input into SQL strings. Use parameterized queries or validate against whitelist."
+
+  # HIGH — Silent Failures
+  - id: BUG-007
+    title: "asyncio.create_task without error callback"
+    severity: high
+    category: reliability
+    file: "backend/app/routes/executions.py:64, automations.py:69"
+    description: "Fire-and-forget tasks. If execute_workflow fails, run stays 'pending' forever (zombie)."
+    fix: "Wrap in _safe_execute that catches exceptions and marks run as failed"
+    preventing_agents: [foundry, runtime_prober, zombie_detector]
+    rule: "NEVER use asyncio.create_task without error callback. Always wrap in safe executor that handles failures."
+
+  # HIGH — Integration
+  - id: BUG-008
+    title: "307 redirect on ALL endpoints loses POST body"
+    severity: high
+    category: integration
+    file: "backend/app/main.py:73 (redirect_slashes=True)"
+    description: "FastAPI's redirect_slashes=True causes 307 on every endpoint called without/with trailing slash. POST body lost on redirect."
+    fix: "Ensure frontend always uses correct URL. fetchAPI should handle both patterns."
+    preventing_agents: [sentinel, contract_validator, trailing_slash_fixer]
+    rule: "ALWAYS test POST endpoints with both trailing slash variants. Document canonical URL for each endpoint."
+
+  # CRITICAL — Frontend
+  - id: BUG-009
+    title: "AuditLog uses wrong localStorage key for auth token"
+    severity: critical
+    category: integration
+    file: "frontend/src/features/audit/AuditLog.jsx:112"
+    description: "Uses 'nexusforge_token' but the app stores token as 'nf_token'. CSV export never sends auth."
+    fix: "Change to localStorage.getItem('nf_token')"
+    preventing_agents: [sentinel, contract_validator, standards_enforcer]
+    rule: "Use a SINGLE constant for localStorage key names. Never hardcode key strings in individual components."
+
+  # HIGH — Duplicate Routes
+  - id: BUG-010
+    title: "Duplicate /auth/login routes with different schemas"
+    severity: high
+    category: architecture
+    file: "backend/app/routes/auth.py + backend/app/auth/routes.py"
+    description: "Both register /auth/login but return different response shapes (access_token vs token)"
+    fix: "Remove duplicate, keep one canonical auth module"
+    preventing_agents: [architect, contract_validator, diff_checker]
+    rule: "NEVER have two route files defining the same path. Use a single canonical source per endpoint."
+
+  # MEDIUM — Demo Remnants
+  - id: BUG-011
+    title: "Dead demo code infrastructure still active"
+    severity: medium
+    category: cleanup
+    file: "frontend/src/services/api.js:162-308"
+    description: "getDemoData(), 5 DEMO_ constants, getMode()/setMode() still defined despite demo mode removal"
+    fix: "Remove all dead demo code"
+    preventing_agents: [sentinel, debt_detector]
+    rule: "When removing a feature, grep for ALL references and remove them completely. Never leave dead code."
+
+  # MEDIUM — Performance
+  - id: BUG-012
+    title: "N+1 subquery in execution list"
+    severity: medium
+    category: performance
+    file: "backend/app/routes/executions.py:137"
+    description: "Correlated subquery (SELECT count(*) FROM step_executions WHERE run_id = wr.id) runs per row"
+    fix: "Use LEFT JOIN with GROUP BY or lateral join"
+    preventing_agents: [architect, schema_designer]
+    rule: "NEVER use correlated subqueries in list endpoints. Use JOINs or pre-computed counts."
+
+  # MEDIUM — Inconsistencies
+  - id: BUG-013
+    title: "9 duplicate _get_user_id implementations"
+    severity: medium
+    category: architecture
+    file: "9 route files each have their own _get_user_id"
+    description: "JWT decoded twice per request (middleware + route). Inconsistent return types (None vs raise 401)"
+    fix: "Use request.state.user_id from middleware consistently"
+    preventing_agents: [architect, standards_enforcer, debt_detector]
+    rule: "Auth parsing should happen ONCE (middleware). Routes should read from request.state, not re-parse."
